@@ -1,0 +1,40 @@
+services:
+  downloader:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${DOWNKYI_BIND:-127.0.0.1}:${DOWNKYI_PORT:-8511}:8080"
+    environment:
+      DOWNKYI_AUTH_MODE: "${DOWNKYI_AUTH_MODE:-token}"
+      DOWNKYI_ADMIN_TOKEN: "${DOWNKYI_ADMIN_TOKEN:-}"
+      DOWNKYI_SECURE_COOKIE: "${DOWNKYI_SECURE_COOKIE:-0}"
+      DOWNKYI_DATA_DIR: /data
+      DOWNKYI_DOWNLOAD_DIR: "${DOWNKYI_DOWNLOAD_DIR:-/downloads}"
+    volumes:
+      - type: bind
+        source: ./docker-data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./downloads
+        target: /downloads
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /export
+        target: /export
+        read_only: false
+        bind:
+          create_host_path: false
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

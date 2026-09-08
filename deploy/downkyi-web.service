@@ -1,0 +1,29 @@
+[Unit]
+Description=DownKyi Web headless downloader
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=downkyi
+Group=downkyi
+WorkingDirectory=/opt/downkyi-web
+Environment=DOWNKYI_DATA_DIR=/var/lib/downkyi-web
+Environment=DOWNKYI_DOWNLOAD_DIR=/srv/downkyi-downloads
+Environment=DOWNKYI_HOST=127.0.0.1
+Environment=DOWNKYI_PORT=8511
+EnvironmentFile=-/etc/downkyi-web.env
+ExecStart=/opt/downkyi-web/.venv/bin/python -m backend
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/downkyi-web /srv/downkyi-downloads
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

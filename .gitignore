@@ -1,0 +1,16 @@
+.venv/
+.env
+.env.*
+!.env.example
+data/
+docker-data/
+downloads/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+node_modules/
+dist/
+test-results/
+playwright-report/

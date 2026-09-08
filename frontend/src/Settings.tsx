@@ -219,7 +219,7 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                       setSuccess("");
                     }}
                     aria-describedby="download-dir-hint download-dir-default"
-                    placeholder="例如 /downloads 或 /export/media/downkyi"
+                    placeholder="例如 /downloads 或 /downloads/archive"
                     autoComplete="off"
                     autoCapitalize="none"
                     spellCheck={false}

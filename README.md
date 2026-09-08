@@ -18,13 +18,16 @@
 
 ## Docker 部署
 
-只使用宿主机目录绑定（bind mount），不创建 Docker 命名卷或匿名卷。首次部署先准备本地目录，并确认宿主机 `/export` 已挂载：
+Compose 从 GitHub Container Registry 拉取 `ghcr.io/tursom/downkyi-web:latest`，无需在 NAS 上安装 Node.js、Python 或构建源码。镜像支持 `linux/amd64` 和 `linux/arm64`。
+
+首次部署前，先确认下文的 GitHub Actions 已成功发布镜像。将 `compose.yaml` 和 `.env.example` 放到 NAS 的应用专用本地目录，复制 `.env.example` 为 `.env`，再按需修改配置。只使用宿主机目录绑定（bind mount），不创建 Docker 命名卷或匿名卷。准备两个本地目录：
 
 ```sh
 sudo mkdir -p ./docker-data ./downloads
 sudo chown 1000:1000 ./docker-data ./downloads
 sudo chmod 700 ./docker-data ./downloads
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 # 令牌模式且未指定 DOWNKYI_ADMIN_TOKEN 时，首次启动会自动生成访问口令：
 docker compose exec downloader cat /data/admin-token
 ```
@@ -35,24 +38,45 @@ docker compose exec downloader cat /data/admin-token
 | --- | --- | --- |
 | `./docker-data` | `/data` | SQLite、配置、登录凭据和任务锁 |
 | `./downloads` | `/downloads` | 默认下载文件与续传文件 |
-| `/export` | `/export` | 原路径访问 NAS/外部存储 |
 
-文件直接保存在宿主机，重建容器不会清空。三个绑定都禁止 Docker 自动创建缺失的源目录，避免误写位置或生成错误权限的目录。已有本地镜像时，可运行 `node scripts/check-bind-mounts.mjs` 验证实际挂载和 UID 1000 权限；镜像名默认 `downkyi-web:local`，可用 `DOWNKYI_CHECK_IMAGE` 指定。
+文件直接保存在宿主机，重建容器不会清空。两个绑定都禁止 Docker 自动创建缺失的源目录，避免误写位置或生成错误权限的目录。具备 Node.js 的开发/验收机器可在拉取镜像后运行 `node scripts/check-bind-mounts.mjs`，验证实际挂载和 UID 1000 权限；脚本默认使用 Compose 的镜像，可用 `DOWNKYI_CHECK_IMAGE` 指定已有本地测试镜像。
 
 可创建 `.env`，参照 `.env.example`：
 
+- `DOWNKYI_IMAGE=ghcr.io/tursom/downkyi-web:latest`：默认跟随主分支镜像。可改为已发布版本（例如 `:0.1.0`）、`:sha-完整提交哈希` 或 `ghcr.io/tursom/downkyi-web@sha256:镜像摘要`，固定部署版本。
 - `DOWNKYI_AUTH_MODE=token`：默认启用令牌保护。设为 `none` 可免登录访问，见下文的内网模式。
 - `DOWNKYI_ADMIN_TOKEN`：令牌模式下至少 16 字符，建议 `openssl rand -hex 32` 生成。不设置则自动生成并持久保存。
 - `DOWNKYI_BIND=0.0.0.0`：允许局域网访问。不要把 HTTP 服务直接暴露到公网。
 - `DOWNKYI_PORT=8511`：宿主机端口。
-- `DOWNKYI_DOWNLOAD_DIR=/downloads`：未保存 Web 设置时使用的初始默认目录。可以在「偏好设置 → 下载设置」修改并持久保存，保存后以 Web 设置为准。写入 NAS 时使用 `/export` 下已存在且 UID 1000 有写权限的专用子目录，例如 `/export/media/downkyi`；先由 NAS 管理员准备目录。
+- `DOWNKYI_DOWNLOAD_DIR=/downloads`：未保存 Web 设置时使用的初始默认目录。可以在「偏好设置 → 下载设置」修改并持久保存，保存后以 Web 设置为准。容器内使用 `/downloads` 或其下已存在且 UID 1000 有写权限的子目录。需要保存到 NAS 的其他专用目录时，修改 Compose 中 `/downloads` 对应的宿主机 `source`，容器内路径仍保持 `/downloads`。
 - `DOWNKYI_SECURE_COOKIE=1`：经过 HTTPS 反向代理时启用，普通 HTTP 下不要设置为 1。
 
 通过 HTTPS 访问时参考 `deploy/nginx.conf`，替换域名和证书，并保留原始 Host。二维码轮询和解析走同源 API，解析反代超时应大于 180 秒。默认不信任代理提供的客户端 IP，因此经代理的登录限速按代理地址共享。
 
-容器以 UID/GID 1000 的非 root 用户运行；只给应用专用目录授权，不要递归修改整个 `/export` 的所有权或权限。绑定的 `/export` 内其他目录也会在容器中可见，实际读写权限由宿主机及 NAS 决定。当前环境的 `/export` 是 NFS 导出，导出根目录拒绝创建文件；即使绑定声明可读写，也不会绕过 NAS 的只读导出或权限限制。SQLite 和任务锁必须保留在本地 `./docker-data`，不要将 `/data` 放到 NFS 上。
+容器以 UID/GID 1000 的非 root 用户运行；只给应用专用目录授权，不要递归修改整个共享目录的所有权或权限。默认仅绑定数据和下载目录，不挂载整个 `/export`。实际写入权限由宿主机决定，目录绑定不会绕过文件系统的只读或权限限制。SQLite 和任务锁必须保留在本地 `./docker-data`，不要将 `/data` 放到 NFS 上。
 
 本机运行的 `./data` 和旧 Docker 卷不会自动迁移或删除。下载记录保存每个任务原来的绝对路径；跨宿主机/容器迁移时，必须让原路径仍可访问，或单独进行离线路径迁移。仅复制媒体并修改默认目录不会重定位旧任务。迁移前停止原应用、备份完整数据与下载文件，检查目标 UID 1000 权限；不要同时运行两个实例写入同一份数据。若原服务仍占用 8511，先停止原服务或为容器选择其他 `DOWNKYI_PORT`。
+
+更新镜像时，先停止服务并备份数据与下载文件，然后执行 `docker compose pull` 和 `docker compose up -d`。恢复旧镜像前也应确认数据库及任务路径兼容，不要将更换镜像当作自动数据回滚。
+
+## GitHub 镜像发布
+
+工作流位于 `.github/workflows/docker-publish.yml`，推送到 GitHub 后生效：
+
+- 推送到 `master` 或 `main`：后端测试、前端测试和构建通过后，构建并发布双架构镜像；默认分支更新 `latest`，并发布分支标签与 `sha-完整提交哈希` 标签。
+- 推送 `v` 开头的语义版本标签（例如 `v0.1.0`）：发布 `0.1.0`、`0.1` 和提交哈希标签，不覆盖主分支的 `latest`。
+- Pull Request 只运行测试和前端构建，不登录镜像仓库，不发布镜像。也可从 GitHub Actions 页面手动运行工作流。
+- 第三方 Action 固定到提交哈希。发布使用 GitHub 自动提供的 `GITHUB_TOKEN`，仅发布作业授予 `packages: write`，不需要另存 Docker Hub 密钥或个人发布令牌。
+
+镜像地址按 GitHub 仓库生成，本仓库为 `ghcr.io/tursom/downkyi-web`。Fork 后需相应修改部署端 `DOWNKYI_IMAGE`。若仓库或组织策略限制 Actions 的包写入权限，需要管理员允许该工作流发布 GitHub Packages。
+
+**GHCR 新包首次发布通常默认为私有，不会因为源码仓库公开就自动公开。** 首次构建成功后，可在 GitHub 的包设置中将其设为 Public，以便 NAS 匿名拉取；也可保持私有，在 NAS 上执行：
+
+```sh
+docker login ghcr.io -u YOUR_GITHUB_USERNAME
+```
+
+在密码提示中输入具有该包读取权限和 `read:packages` 范围的 classic PAT（组织要求 SSO 时还需授权）。不要把它写进 Compose、应用 `.env` 或提交到 Git。登录后再执行 `docker compose pull`。应用访问口令与 GHCR 登录凭据互不相关。
 
 ## 本机运行
 
@@ -83,7 +107,7 @@ DOWNKYI_DOWNLOAD_DIR=/srv/downkyi-downloads \
 
 ## 配置下载目录
 
-在「偏好设置 → 下载设置」填写下载目录并保存，无需重启。路径必须是服务进程可见的、已存在且实际可写的绝对目录。Docker 部署使用容器内路径，例如 `/downloads` 或已挂载的 `/export/media/downkyi`，不是浏览器所在电脑的路径。
+在「偏好设置 → 下载设置」填写下载目录并保存，无需重启。路径必须是服务进程可见的、已存在且实际可写的绝对目录。Docker 部署使用容器内路径，例如 `/downloads` 或已创建的 `/downloads/archive`，不是浏览器所在电脑的路径；未挂载的宿主机路径不可直接使用。
 
 - 保存前会执行临时文件写入检查。不存在、只读、权限不足、符号链接、系统/私有数据目录或已有任务目录会被拒绝，不会自动创建目录或修改权限。
 - 设置保存在 SQLite 中，重启后保留；环境变量只在尚未保存目录设置时提供初始默认值。
@@ -109,7 +133,7 @@ DOWNKYI_BIND=0.0.0.0
 ```
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 ```
 
 systemd 部署可在 `/etc/downkyi-web.env` 中设置 `DOWNKYI_AUTH_MODE=none`，再重启应用服务。

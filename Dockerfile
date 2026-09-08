@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS frontend
+FROM --platform=$BUILDPLATFORM node:22-bookworm-slim AS frontend
 WORKDIR /build
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci

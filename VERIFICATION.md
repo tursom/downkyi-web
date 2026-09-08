@@ -1,5 +1,44 @@
 # Delivery Verification
 
+## Export Mount Removal
+
+- Compose now binds only `./docker-data:/data` and `./downloads:/downloads`.
+  The `/export` bind was removed; no host directory or stored file was deleted.
+- Deployment documentation and directory examples reflect the two-mount setup.
+  The earlier three-mount verification below is historical and superseded.
+- Compose validation passed. The updated mount checker inspected a real
+  container with exactly two bind mounts, verified that `/export` was absent,
+  and completed write/read/delete probes as UID 1000 in both mounted directories.
+  The temporary verification container was removed.
+- Frontend: 54 tests passed; TypeScript/Vite build passed. No NAS deployment,
+  remote image publication, or change to the native service's saved directory
+  was performed.
+
+## GHCR Publishing Update
+
+- Added `.github/workflows/docker-publish.yml`: tests gate publication to GHCR,
+  pull requests cannot publish, and official Actions are pinned to verified
+  commit hashes. Default-branch builds publish `latest`; semantic version tags
+  publish version tags without replacing `latest`. Both include full-SHA tags.
+- Configured `linux/amd64` and `linux/arm64` builds with QEMU/Buildx. The frontend
+  build stage uses the builder's native platform; the Python runtime follows
+  the target architecture.
+- `actionlint` passed. Compose configuration checks passed for the default
+  `ghcr.io/tursom/downkyi-web:latest` image and version/digest overrides, with no
+  deployment-host build and all three bind mounts preserved.
+- Local amd64 Docker build passed, including TypeScript/Vite compilation.
+  Backend: 202 passed on host Python 3.14 and 202 passed as UID 1000 on container
+  Python 3.12. Frontend: 54 passed. Existing two deprecation warnings remain.
+- Actual bind-mount probes passed both with `DOWNKYI_CHECK_IMAGE` and with the
+  image taken directly from Compose through `DOWNKYI_IMAGE`. Verification
+  containers were removed. The existing server health endpoint remains OK.
+- The host root filesystem had no space available to ordinary users. Container
+  test dependencies and temporary files used a bounded tmpfs instead; unrelated
+  host data and Docker caches were not deleted.
+- GitHub execution, remote GHCR publication/pull, and the arm64 build have not
+  been run yet. These require pushing the workflow and a successful Actions run.
+  No NAS deployment, credential changes or data migration was performed.
+
 ## Configurable Download Directory Update
 
 - Web download settings now support a persisted `download_dir`, with the
@@ -26,9 +65,9 @@
 
 ## Bind Mount Update
 
-Compose now declares only bind mounts: `./docker-data:/data`,
-`./downloads:/downloads`, and `/export:/export`. There are no top-level named
-volumes, and missing source directories are not created automatically by Docker.
+At the earlier bind-mount checkpoint, Compose declared `./docker-data:/data`,
+`./downloads:/downloads`, and `/export:/export`. There were no top-level named
+volumes, and missing source directories were not created automatically by Docker.
 Local application directories were created with UID/GID 1000 and mode 0700.
 
 `/export` is an existing NFS export. Creating `/export/downkyi` was rejected by

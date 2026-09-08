@@ -1,6 +1,6 @@
 services:
   downloader:
-    build: .
+    image: "${DOWNKYI_IMAGE:-ghcr.io/tursom/downkyi-web:latest}"
     init: true
     restart: unless-stopped
     ports:
@@ -20,12 +20,6 @@ services:
       - type: bind
         source: ./downloads
         target: /downloads
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /export
-        target: /export
-        read_only: false
         bind:
           create_host_path: false
     stop_grace_period: 30s

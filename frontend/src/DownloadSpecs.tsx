@@ -18,11 +18,13 @@ export default function DownloadSpecs({
   setOptions,
   entries,
   downloadDir,
+  disabled = false,
 }: {
   options: DownloadOptions;
   setOptions: (options: DownloadOptions) => void;
   entries: ParsedEntry[];
   downloadDir?: string;
+  disabled?: boolean;
 }) {
   const available = availableSpecs(entries);
   const update = (patch: Partial<DownloadOptions>) =>
@@ -33,6 +35,7 @@ export default function DownloadSpecs({
       <span className="field-label">下载内容</span>
       <div className="segmented" role="group" aria-label="下载内容">
         <button
+          disabled={disabled}
           aria-pressed={options.mode === "video"}
           className={options.mode === "video" ? "active" : ""}
           onClick={() => update({ mode: "video" })}
@@ -41,6 +44,7 @@ export default function DownloadSpecs({
           视频
         </button>
         <button
+          disabled={disabled}
           aria-pressed={options.mode === "audio"}
           className={options.mode === "audio" ? "active" : ""}
           onClick={() => update({ mode: "audio" })}
@@ -55,7 +59,7 @@ export default function DownloadSpecs({
       <select
         id="quality"
         value={options.quality}
-        disabled={options.mode === "audio"}
+        disabled={disabled || options.mode === "audio"}
         onChange={(event) => update({ quality: event.target.value as Quality })}
       >
         <option value="best">最佳可用画质</option>
@@ -77,7 +81,7 @@ export default function DownloadSpecs({
       <select
         id="codec"
         value={options.codec}
-        disabled={options.mode === "audio"}
+        disabled={disabled || options.mode === "audio"}
         onChange={(event) => update({ codec: event.target.value as Codec })}
       >
         <option value="auto">自动选择</option>
@@ -93,7 +97,7 @@ export default function DownloadSpecs({
             </option>
           )}
       </select>
-      <fieldset className="artifact-options">
+      <fieldset className="artifact-options" disabled={disabled}>
         <legend>附加文件</legend>
         <label className="check-label">
           <input

@@ -36,6 +36,10 @@ class ParseInput(InputModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class RetryParseInput(InputModel):
+    entry_ids: list[str] = Field(min_length=1, max_length=100)
+
+
 class NewTasks(InputModel):
     parse_id: str = Field(min_length=1, max_length=100)
     entry_ids: list[str] = Field(min_length=1, max_length=50)
@@ -165,8 +169,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
     async def library():
         return {"tasks": [public_task(t) for t in app.state.store.all_tasks() if (t["status"] == "completed" or t["record_removed"]) and not (t["record_removed"] and t["files_deleted"])]}
 
-    @api.post("/parse")
-    async def parse(body: ParseInput, request: Request):
+    async def run_parse(request: Request, operation):
         if parse_gate.locked():
             raise ServiceError(429, "已有解析任务进行中，请稍后重试")
         async with parse_gate:
@@ -175,7 +178,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
             job = None
             try:
                 cookie = app.state.account.snapshot(runtime / "cookies.txt")
-                job = asyncio.create_task(app.state.media.parse(body.url, cookie))
+                job = asyncio.create_task(operation(cookie))
                 parse_jobs.add(job)
                 async with asyncio.timeout(180):
                     while not job.done():
@@ -208,6 +211,52 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
                     await asyncio.gather(job, return_exceptions=True)
                     parse_jobs.discard(job)
                 shutil.rmtree(runtime, ignore_errors=True)
+
+    @api.post("/parse")
+    async def parse(body: ParseInput, request: Request):
+        return await run_parse(request, lambda cookie: app.state.media.parse(body.url, cookie))
+
+    @api.post("/parse/{parse_id}/retry")
+    async def retry_parse(parse_id: str, body: RetryParseInput, request: Request):
+        original = app.state.store.get_parse(parse_id)
+        if not original:
+            raise ServiceError(410, "解析结果已过期，请重新解析原链接")
+        if len(set(body.entry_ids)) != len(body.entry_ids):
+            raise ServiceError(422, "重试项目重复")
+        entries = {entry["id"]: entry for entry in original["entries"]}
+        if any(key not in entries for key in body.entry_ids):
+            raise ServiceError(422, "包含不属于本次解析的项目")
+        if any(entries[key]["available"] for key in body.entry_ids):
+            raise ServiceError(422, "仅可重新解析失败的项目")
+        urls = [entries[key]["url"] for key in body.entry_ids]
+
+        async def retry(cookie):
+            from .media import PARTIAL_WARNING
+            refreshed = await app.state.media.retry(urls, cookie)
+            updates = refreshed.get("entries", [])
+            if len(updates) != len(urls) or {entry.get("url") for entry in updates} != set(urls):
+                raise RuntimeError("重新解析结果不完整，请重试")
+            by_url = {entry["url"]: entry for entry in updates}
+            merged = []
+            for entry in original["entries"]:
+                if entry["id"] not in body.entry_ids:
+                    merged.append(entry)
+                    continue
+                update = by_url[entry["url"]]
+                if update.get("available"):
+                    merged.append({**entry, **update, "id": entry["id"],
+                                   "url": entry["url"], "group": entry["group"]})
+                else:
+                    merged.append({**entry, "available": False, "error": update.get("error"),
+                                   "qualities": [], "codecs": [], "has_subtitles": False})
+            warnings = list(dict.fromkeys(warning for warning in
+                [*original.get("warnings", []), *refreshed.get("warnings", [])]
+                if warning != PARTIAL_WARNING))
+            if any(not entry["available"] for entry in merged):
+                warnings.append(PARTIAL_WARNING)
+            return {**original, "entries": merged, "warnings": warnings}
+
+        return await run_parse(request, retry)
 
     @api.post("/tasks", status_code=201)
     async def create_tasks(body: NewTasks):

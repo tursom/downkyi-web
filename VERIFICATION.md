@@ -1,5 +1,30 @@
 # Delivery Verification
 
+## Retry Failed Parse Entries
+
+- Added `POST /api/parse/{id}/retry` for selected unavailable entries. The server
+  resolves URLs from its cached snapshot, rejects unknown/duplicate/successful
+  selections, and returns a new complete snapshot without overwriting the old
+  one. Expired snapshots return 410.
+- Recovered entries retain their identity and collection grouping. Entries that
+  still fail retain their prior titles, durations and covers; successful entries
+  outside the retry selection remain unchanged. Recovered entries can be queued
+  using the new parse ID.
+- Retry uses isolated workers without parent-collection discovery, and shares
+  the parse semaphore, credential snapshots, timeout and cancellation cleanup.
+- Backend: 247 tests passed, covering cache preservation, request validation,
+  authentication/open mode, concurrency, failure cleanup and worker termination.
+- Frontend: 68 tests and 98 fixture browser checks passed at four viewport
+  widths. The UI provides single/batch retry, cancellation, recovery feedback
+  and warning icons, preserves selection/options/search/scroll state, and
+  ignores stale responses after cancel, timeout or close.
+- Live API integration retried three cached failures, recovered one, returned
+  all 58 entries under a new parse ID, and preserved every unselected entry
+  and the original cached snapshot. No download tasks were created.
+- A live retry requested exactly three previously unavailable videos and
+  returned three results in about 2.3 seconds; one recovered and two remained
+  rate-limited. The entire collection was not re-extracted.
+
 ## Video-to-Collection Parsing Fix
 
 - Reproduced `av116605745239789` returning one entry on the NAS. The Bilibili

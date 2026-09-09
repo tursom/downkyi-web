@@ -217,6 +217,45 @@
   min-height: 62px;
   cursor: pointer;
 }
+.picker-retry {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 17px;
+  font-size: 11px;
+  color: #5c7c6d;
+}
+.picker-retry > .button {
+  font-size: 11px;
+  white-space: normal;
+  max-width: 100%;
+}
+.picker-retry > p,
+.picker-retry > .loading {
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+}
+.entry-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  cursor: inherit;
+}
+.entry-choice > svg,
+.entry-choice > input,
+.entry-retry {
+  flex-shrink: 0;
+}
+.entry-retry {
+  font-size: 11px;
+  min-height: 32px;
+}
+.entry-choice > svg {
+  color: #89702d;
+}
 .entry-row:has(input:checked) {
   background: #f5faf7;
 }

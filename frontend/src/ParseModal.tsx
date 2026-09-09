@@ -8,7 +8,7 @@ import {
   Plus,
   Search,
 } from "lucide-react";
-import { api, errorMessage, isAbort } from "./api";
+import { api, ApiError, errorMessage, isAbort } from "./api";
 import { ErrorNotice, Modal, Spinner, Thumbnail } from "./components";
 import EntryPicker, { eligible } from "./EntryPicker";
 import DownloadSpecs, { availableSpecs } from "./DownloadSpecs";
@@ -36,7 +36,8 @@ export default function ParseModal({
     cover: true,
     subtitles: false,
   });
-  const [busy, setBusy] = useState<"parse" | "create" | null>(null);
+  const [busy, setBusy] = useState<"parse" | "retry" | "create" | null>(null);
+  const [retryMessage, setRetryMessage] = useState("");
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
   const timeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -44,6 +45,7 @@ export default function ParseModal({
   useEffect(
     () => () => {
       controller.current?.abort();
+      controller.current = null;
       clearTimeout(timeout.current);
     },
     [],
@@ -65,27 +67,31 @@ export default function ParseModal({
       ? "当前所选项目不含该画质或编码，请重新选择规格。"
       : "";
   const valid = chosen.length > 0 && chosen.length <= 50 && !specError;
-  function cancelParse() {
+  function abortRequest() {
     controller.current?.abort();
+    controller.current = null;
     clearTimeout(timeout.current);
+  }
+  function cancelParse() {
+    abortRequest();
     setBusy(null);
-    setError("解析已取消");
+    setError(busy === "retry" ? "重试已取消，可以再次尝试。" : "解析已取消");
   }
   function close() {
-    controller.current?.abort();
-    clearTimeout(timeout.current);
+    abortRequest();
     onClose();
   }
   async function parse(event: FormEvent) {
     event.preventDefault();
-    if (!url.trim() || busy) return;
-    controller.current?.abort();
+    if (!url.trim() || busy || controller.current) return;
     const request = new AbortController();
     controller.current = request;
     setBusy("parse");
     setError("");
+    setRetryMessage("");
     timeout.current = setTimeout(() => {
-      request.abort();
+      if (controller.current !== request) return;
+      abortRequest();
       setBusy(null);
       setError("解析超时（180 秒），请重试或缩小内容范围。");
     }, PARSE_TIMEOUT_MS);
@@ -95,7 +101,7 @@ export default function ParseModal({
         body: { url: url.trim() },
         signal: request.signal,
       });
-      if (request.signal.aborted) return;
+      if (request.signal.aborted || controller.current !== request) return;
       const mode = result.entries.some((entry) => eligible(entry, "video"))
         ? "video"
         : "audio";
@@ -119,12 +125,68 @@ export default function ParseModal({
     } finally {
       if (controller.current === request) {
         clearTimeout(timeout.current);
+        controller.current = null;
         if (!request.signal.aborted) setBusy(null);
       }
     }
   }
+  async function retry(entryIds: string[]) {
+    if (!parsed || busy || controller.current || step !== 2) return;
+    const ids = parsed.entries
+      .filter((entry) => !entry.available && entryIds.includes(entry.id))
+      .slice(0, 100)
+      .map((entry) => entry.id);
+    if (!ids.length) return;
+    const request = new AbortController();
+    controller.current = request;
+    setBusy("retry");
+    setError("");
+    setRetryMessage("");
+    timeout.current = setTimeout(() => {
+      if (controller.current !== request) return;
+      abortRequest();
+      setBusy(null);
+      setError("重试超时（180 秒），原列表和选择已保留，请再次尝试。");
+    }, PARSE_TIMEOUT_MS);
+    try {
+      const result = await api<ParseResult>(
+        `/parse/${encodeURIComponent(parsed.id)}/retry`,
+        { method: "POST", body: { entry_ids: ids }, signal: request.signal },
+      );
+      if (request.signal.aborted || controller.current !== request) return;
+      const recovered = result.entries.filter(
+        (entry) => ids.includes(entry.id) && entry.available,
+      ).length;
+      // The server returns the merged result with stable entry identities and a new parse ID.
+      // Keep selection/options and the mounted picker intact; recovered entries stay unchecked.
+      setParsed(result);
+      setRetryMessage(
+        `已恢复 ${recovered} 项${recovered < ids.length ? `，${ids.length - recovered} 项仍解析失败，可再次重试。` : "，请勾选需要下载的项目。"}`,
+      );
+    } catch (cause) {
+      if (
+        !request.signal.aborted &&
+        controller.current === request &&
+        !isAbort(cause)
+      ) {
+        setError(
+          cause instanceof ApiError && cause.status === 410
+            ? "解析结果已过期，请点击「更换链接」后重新解析原链接。原列表和选择已保留。"
+            : cause instanceof ApiError && cause.status === 429
+              ? "解析繁忙，请稍后重试。"
+              : errorMessage(cause),
+        );
+      }
+    } finally {
+      if (controller.current === request) {
+        clearTimeout(timeout.current);
+        controller.current = null;
+        setBusy(null);
+      }
+    }
+  }
   async function create() {
-    if (!parsed || !valid || busy) return;
+    if (!parsed || !valid || busy || controller.current) return;
     const request = new AbortController();
     controller.current = request;
     setBusy("create");
@@ -144,7 +206,10 @@ export default function ParseModal({
       if (!request.signal.aborted && !isAbort(cause))
         setError(errorMessage(cause));
     } finally {
-      if (!request.signal.aborted) setBusy(null);
+      if (controller.current === request) {
+        controller.current = null;
+        if (!request.signal.aborted) setBusy(null);
+      }
     }
   }
   return (
@@ -231,9 +296,12 @@ export default function ParseModal({
               {step === 2 && (
                 <button
                   className="text-link"
+                  disabled={!!busy}
                   onClick={() => {
+                    if (controller.current) return;
                     setStep(1);
                     setError("");
+                    setRetryMessage("");
                   }}
                 >
                   更换链接
@@ -256,11 +324,16 @@ export default function ParseModal({
                   selected={selected}
                   setSelected={setSelected}
                   mode={options.mode}
+                  retry={(ids) => void retry(ids)}
+                  retrying={busy === "retry"}
+                  retryMessage={retryMessage}
+                  cancelRetry={cancelParse}
                 />
                 <DownloadSpecs
                   entries={chosen}
                   options={options}
                   setOptions={setOptions}
+                  disabled={busy === "retry"}
                   downloadDir={downloadDir}
                 />
               </div>
@@ -281,13 +354,15 @@ export default function ParseModal({
         <span>{step > 1 ? `已选 ${chosen.length} 项` : "服务器下载空间"}</span>
         <button
           className="button secondary"
-          disabled={busy === "create"}
+          disabled={busy === "create" || busy === "retry"}
           onClick={
             step === 1
               ? close
               : () => {
+                  if (controller.current) return;
                   setStep(step - 1);
                   setError("");
+                  setRetryMessage("");
                 }
           }
         >
@@ -297,8 +372,9 @@ export default function ParseModal({
         {step === 2 && (
           <button
             className="button primary"
-            disabled={!valid}
+            disabled={!valid || !!busy}
             onClick={() => {
+              if (controller.current) return;
               setStep(3);
               setError("");
             }}

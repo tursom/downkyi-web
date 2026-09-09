@@ -44,10 +44,12 @@ RATE_ERROR = "Bilibili 请求受到限制，请稍后重试。"
 AUTH_ERROR = "该内容需要有效登录或相应权限，请更新登录凭据后重试。"
 UNAVAILABLE_ERROR = "该内容已失效或受地区限制，暂时无法访问。"
 DISK_ERROR = "磁盘空间不足，请清理空间后重试。"
+PARTIAL_WARNING = "部分条目不可用，已保留实际获取的信息。"
+RETRY_CHANGED_ERROR = "该项目的信息已发生变化，请重新解析原链接。"
 COLLECTION_ERROR = "未能确认视频所属合集，本次仅解析当前视频。"
 SAFE_ERRORS = {UNSUPPORTED, NETWORK_ERROR, TIMEOUT_ERROR, NO_FORMATS, FORMAT_ERROR,
                VALIDATION_ERROR, DEPENDENCY_ERROR, GENERIC_ERROR, RATE_ERROR,
-               AUTH_ERROR, UNAVAILABLE_ERROR, DISK_ERROR, COLLECTION_ERROR}
+               AUTH_ERROR, UNAVAILABLE_ERROR, DISK_ERROR, COLLECTION_ERROR, RETRY_CHANGED_ERROR}
 BV = r"BV[0-9A-Za-z]{10}"
 VIDEO_ID = rf"(?:{BV}|av[1-9][0-9]*)"
 EXTRACTOR_NAMES = (
@@ -413,12 +415,12 @@ def _entry(info: dict, url: str, group: str, error=None) -> dict:
     }
 
 
-def parse_media(url: str, cookie_path=None) -> dict:
+def parse_media(url: str, cookie_path=None, *, expand_collection=True) -> dict:
     url = _resolve_url(url)
     logger = _Logger()
     options = _base_options(cookie_path, logger)
     options.update({"writesubtitles": True, "listsubtitles": True, "lazy_playlist": True,
-                    "downkyi_expand_collection": True, "sleep_interval_requests": 0.25})
+                    "downkyi_expand_collection": expand_collection, "sleep_interval_requests": 0.25})
     entries, seen = [], set()
     truncated = False
     visited = 0
@@ -496,10 +498,32 @@ def parse_media(url: str, cookie_path=None) -> dict:
     if truncated:
         warnings.append("结果超过处理范围，仅显示前 100 个条目；请使用更具体的链接。")
     if any(not entry["available"] for entry in entries):
-        warnings.append("部分条目不可用，已保留实际获取的信息。")
+        warnings.append(PARTIAL_WARNING)
     return {"title": _text(root.get("title")) or entries[0]["title"],
             "thumbnail": _thumbnail(root.get("thumbnail")) or entries[0]["thumbnail"],
             "entries": entries, "truncated": truncated, "warnings": warnings}
+
+
+def retry_media(urls: list[str], cookie_path=None) -> dict:
+    if not isinstance(urls, list) or not 1 <= len(urls) <= MAX_ENTRIES:
+        raise ValueError(UNSUPPORTED)
+    targets = [canonical_url(url, allow_short=False) for url in urls]
+    if len(set(targets)) != len(targets):
+        raise ValueError(UNSUPPORTED)
+    entries, warnings = [], []
+    for target in targets:
+        try:
+            result = parse_media(target, cookie_path, expand_collection=False)
+            matches = [entry for entry in result["entries"] if entry["url"] == target]
+            if len(matches) != 1:
+                raise RuntimeError(RETRY_CHANGED_ERROR)
+            entries.append(matches[0])
+            for warning in result["warnings"]:
+                if warning not in warnings and len(warnings) < 10:
+                    warnings.append(warning)
+        except Exception as error:
+            entries.append(_entry({}, target, "", error))
+    return {"entries": entries, "warnings": warnings}
 
 
 async def _stop_process(process):
@@ -521,10 +545,17 @@ class MediaService:
         self.config = config
 
     async def parse(self, url: str, cookie_path: Path | None = None) -> dict:
-        url = canonical_url(url)
-        payload = json.dumps({"url": url, "cookie_path": str(cookie_path) if cookie_path else None}).encode()
+        return await self._extract("parse", {"url": canonical_url(url)}, cookie_path)
+
+    async def retry(self, urls: list[str], cookie_path: Path | None = None) -> dict:
+        return await self._extract("retry", {"urls": urls}, cookie_path)
+
+    async def _extract(self, operation: str, payload: dict, cookie_path: Path | None) -> dict:
+        payload = json.dumps({**payload, "cookie_path": str(cookie_path) if cookie_path else None}).encode()
+        if len(payload) > MAX_INPUT_BYTES:
+            raise ValueError(UNSUPPORTED)
         process = await asyncio.create_subprocess_exec(
-            sys.executable, "-m", "backend.media", "parse", "-",
+            sys.executable, "-m", "backend.media", operation, "-",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL, start_new_session=True,
             cwd=str(Path(__file__).resolve().parents[1]),
@@ -748,7 +779,7 @@ class _ParseTimeout(BaseException):
 def main(argv=None) -> int:
     args = sys.argv[1:] if argv is None else argv
     try:
-        if len(args) != 2 or args[0] not in ("parse", "download"):
+        if len(args) != 2 or args[0] not in ("parse", "retry", "download"):
             raise ValueError(GENERIC_ERROR)
         if args[0] == "download":
             with open(args[1], "rb") as file:
@@ -768,14 +799,17 @@ def main(argv=None) -> int:
                 _emit(event)
 
         with open(os.devnull, "w") as sink:
-            if args[0] == "parse":
+            if args[0] in ("parse", "retry"):
                 def timed_out(signum, frame):
                     raise _ParseTimeout(TIMEOUT_ERROR)
                 previous_handler = signal.signal(signal.SIGALRM, timed_out)
                 signal.alarm(PARSE_TIMEOUT)
                 try:
                     with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                        result = parse_media(payload.get("url", ""), payload.get("cookie_path"))
+                        if args[0] == "retry":
+                            result = retry_media(payload.get("urls"), payload.get("cookie_path"))
+                        else:
+                            result = parse_media(payload.get("url", ""), payload.get("cookie_path"))
                     emit({"event": "parsed", "result": result})
                 finally:
                     signal.alarm(0)

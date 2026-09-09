@@ -84,6 +84,31 @@ export const parsed: ParseResult = {
     },
   ],
 };
+// A retry response is the complete merged result, including entries not retried.
+export const retryParsed: ParseResult = {
+  ...parsed,
+  entries: [
+    ...parsed.entries,
+    {
+      ...parsed.entries[2],
+      id: "p5",
+      title: "加载失败的花絮",
+      url: "entry5",
+      error: "读取资源超时",
+    },
+  ],
+};
+export function retryResult(id: string, recoveredIds: string[]): ParseResult {
+  return {
+    ...retryParsed,
+    id,
+    entries: retryParsed.entries.map((entry) =>
+      recoveredIds.includes(entry.id)
+        ? { ...entry, available: true, error: null, qualities: [720], codecs: ["avc"] }
+        : entry,
+    ),
+  };
+}
 export const system = {
   version: "test",
   yt_dlp_version: "test",

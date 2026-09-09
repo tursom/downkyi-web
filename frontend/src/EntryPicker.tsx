@@ -1,4 +1,5 @@
-import { ChevronDown, ChevronRight, LockKeyhole, Search } from "lucide-react";
+import { ChevronDown, ChevronRight, AlertCircle, Search } from "lucide-react";
+import { Spinner } from "./components";
 import { useState } from "react";
 import { duration } from "./format";
 import type { DownloadMode, ParsedEntry } from "./types";
@@ -17,11 +18,19 @@ export default function EntryPicker({
   selected,
   setSelected,
   mode,
+  retry,
+  retrying = false,
+  retryMessage,
+  cancelRetry,
 }: {
   entries: ParsedEntry[];
   selected: string[];
   setSelected: (ids: string[]) => void;
   mode: DownloadMode;
+  retry: (ids: string[]) => void;
+  retrying?: boolean;
+  retryMessage: string;
+  cancelRetry: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<string[]>([]);
@@ -31,6 +40,7 @@ export default function EntryPicker({
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
   );
+  const failed = entries.filter((entry) => !entry.available);
   const available = entries.filter((entry) => eligible(entry, mode));
   const count = available.filter((entry) => selected.includes(entry.id)).length;
   return (
@@ -41,6 +51,30 @@ export default function EntryPicker({
           已选 {count} / {available.length}
         </span>
       </div>
+      {(failed.length > 0 || retryMessage) && (
+        <div className="picker-retry">
+          {failed.length > 0 && (
+            <button
+              type="button"
+              className="button secondary"
+              disabled={retrying}
+              onClick={() => retry(failed.map((entry) => entry.id))}
+            >
+              重新解析失败项 ({failed.length})
+            </button>
+          )}
+          {retrying ? (
+            <>
+              <Spinner label="正在重试，最长 180 秒…" />
+              <button type="button" className="text-link" onClick={cancelRetry}>
+                取消重试
+              </button>
+            </>
+          ) : (
+            retryMessage && <p role="status">{retryMessage}</p>
+          )}
+        </div>
+      )}
       <label className="entry-search">
         <Search size={15} />
         <input
@@ -69,7 +103,7 @@ export default function EntryPicker({
                 ref={(node) => {
                   if (node) node.indeterminate = partial;
                 }}
-                disabled={!selectable.length}
+                disabled={retrying || !selectable.length}
                 onChange={() =>
                   setSelected(
                     checked
@@ -106,42 +140,55 @@ export default function EntryPicker({
             </div>
             {!collapsed.includes(group) &&
               visible.map((entry) => (
-                <label
+                <div
                   key={entry.id}
                   className={`entry-row ${eligible(entry, mode) ? "" : "unavailable"}`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={
-                      eligible(entry, mode) && selected.includes(entry.id)
-                    }
-                    disabled={!eligible(entry, mode)}
-                    onChange={() =>
-                      setSelected(
-                        selected.includes(entry.id)
-                          ? selected.filter((id) => id !== entry.id)
-                          : [...selected, entry.id],
-                      )
-                    }
-                  />
-                  <span className="entry-title">
-                    {entry.title}
-                    <small>
-                      {!entry.available
-                        ? entry.error || "资源不可用"
-                        : !entry.qualities.length
-                          ? "仅音频资源"
-                          : `${entry.qualities.map(qualityName).join(" / ")}${entry.has_subtitles ? " · 有字幕" : ""}`}
-                    </small>
-                  </span>
-                  {!entry.available ? (
-                    <LockKeyhole size={13} />
-                  ) : (
-                    <span className="entry-duration">
-                      {duration(entry.duration)}
+                  <label className="entry-choice">
+                    <input
+                      type="checkbox"
+                      checked={
+                        eligible(entry, mode) && selected.includes(entry.id)
+                      }
+                      disabled={retrying || !eligible(entry, mode)}
+                      onChange={() =>
+                        setSelected(
+                          selected.includes(entry.id)
+                            ? selected.filter((id) => id !== entry.id)
+                            : [...selected, entry.id],
+                        )
+                      }
+                    />
+                    <span className="entry-title">
+                      {entry.title}
+                      <small>
+                        {!entry.available
+                          ? `解析失败${entry.error ? `：${entry.error}` : ""}`
+                          : !entry.qualities.length
+                            ? "仅音频资源"
+                            : `${entry.qualities.map(qualityName).join(" / ")}${entry.has_subtitles ? " · 有字幕" : ""}`}
+                      </small>
                     </span>
+                    {!entry.available ? (
+                      <AlertCircle size={13} aria-label="解析失败" />
+                    ) : (
+                      <span className="entry-duration">
+                        {duration(entry.duration)}
+                      </span>
+                    )}
+                  </label>
+                  {!entry.available && (
+                    <button
+                      type="button"
+                      className="text-link entry-retry"
+                      aria-label={`重试：${entry.title}`}
+                      disabled={retrying}
+                      onClick={() => retry([entry.id])}
+                    >
+                      重试
+                    </button>
                   )}
-                </label>
+                </div>
               ))}
           </div>
         );

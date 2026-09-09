@@ -60,6 +60,9 @@ try {
       apiError = false,
       qrStatus = "waiting";
     let createdBody;
+    let retryCount = 0;
+    let finishRetry;
+    const retryBodies = [];
     const initialDownloadDir = "/downloads/long-directory-name-for-responsive-layout-check";
     let settings = {
       concurrency: 2,
@@ -104,13 +107,13 @@ try {
     };
     const entries = Array.from({ length: 6 }, (_, index) => ({
       id: `part-${index}`,
-      title: `第 ${index + 1} 集：响应式布局和分 P 选择测试`,
+      title: `第 ${index + 1} 集：响应式布局和分 P 选择测试${index === 5 ? " RetryLayoutCheckWithAnExtremelyLongUnbrokenTitle" : ""}`,
       thumbnail: "/test-cover.png",
       duration: 125,
       url: `entry-${index}`,
       group: index < 4 ? "正片" : "花絮",
       available: index !== 5,
-      error: index === 5 ? "尚未播出" : null,
+      error: index === 5 ? "读取资源超时，请稍后重试" : null,
       qualities: index === 4 ? [] : [2160, 1440, 1080, 720],
       codecs: ["avc", "hevc", "av1"],
       has_subtitles: index % 2 === 0,
@@ -173,6 +176,24 @@ try {
           status: qrStatus,
           message: qrStatus === "waiting" ? "等待扫码" : "二维码已过期",
         });
+      if (/^\/api\/parse\/[^/]+\/retry$/.test(path)) {
+        expect(route.request().method()).toBe("POST");
+        expect(path).toBe(`/api/parse/${retryCount ? "parse-retry-1" : "parse-test"}/retry`);
+        retryBodies.push(route.request().postDataJSON());
+        retryCount += 1;
+        if (retryCount === 2) {
+          await new Promise((resolve) => { finishRetry = resolve; });
+        }
+        return json({
+          id: `parse-retry-${retryCount}`,
+          title: "用于浏览器验证的分 P 合集",
+          thumbnail: "/test-cover.png",
+          entries: entries.map((entry) => retryCount === 2 && !entry.available
+            ? { ...entry, available: true, error: null } : entry),
+          truncated: true,
+          warnings: retryCount === 2 ? [] : ["部分资源不可用"],
+        });
+      }
       if (path === "/api/parse")
         return json({
           id: "parse-test",
@@ -327,6 +348,38 @@ try {
     await page.getByLabel("视频编码").selectOption("av1");
     await page.getByLabel("下载字幕").check();
     await page.getByLabel("下载封面").uncheck();
+    const retryAll = page.getByRole("button", { name: "重新解析失败项 (1)", exact: true });
+    const retryOne = page.getByRole("button", { name: `重试：${entries[5].title}`, exact: true });
+    await expect(retryAll).toBeVisible();
+    await expect(retryOne).toBeVisible();
+    expect(await retryOne.evaluate((button) => !!button.closest("label"))).toBe(false);
+    await expect(page.locator(".entry-row .lucide-lock-keyhole")).toHaveCount(0);
+    await retryAll.click();
+    await expect(page.getByText("已恢复 0 项，1 项仍解析失败，可再次重试。")).toBeVisible();
+    await retryOne.click();
+    await expect(page.getByRole("button", { name: "取消重试" })).toBeVisible();
+    for (const button of [retryAll, retryOne,
+      page.getByRole("button", { name: "确认规格" }),
+      page.getByRole("button", { name: "上一步" }),
+      page.getByRole("button", { name: "更换链接" })]) {
+      await expect(button).toBeDisabled();
+    }
+    await expect(page.getByLabel("画质", { exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "关闭弹窗" })).toBeEnabled();
+    await page.locator(".picker-retry").scrollIntoViewIfNeeded();
+    await checkLayout("parse-retry-pending");
+    await expect.poll(() => typeof finishRetry).toBe("function");
+    finishRetry();
+    await expect(page.getByText("已恢复 1 项，请勾选需要下载的项目。")).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: new RegExp(`^${entries[5].title}`) })).not.toBeChecked();
+    await expect(page.getByRole("checkbox", { name: new RegExp(`^${entries[5].title}`) })).toBeEnabled();
+    await expect(page.getByLabel("画质", { exact: true })).toHaveValue("1440");
+    await expect(page.getByLabel("视频编码")).toHaveValue("av1");
+    await expect(page.getByLabel("下载字幕")).toBeChecked();
+    await expect(page.getByLabel("下载封面")).not.toBeChecked();
+    expect(retryBodies).toEqual([{ entry_ids: ["part-5"] }, { entry_ids: ["part-5"] }]);
+    await page.locator(".picker-retry").scrollIntoViewIfNeeded();
+    await checkLayout("parse-retry-recovered");
     await page.getByRole("button", { name: "确认规格" }).click();
     await expect(page.getByText("准备添加 4 个下载任务")).toBeVisible();
     await checkLayout("parse-review");
@@ -338,7 +391,7 @@ try {
     await page.getByRole("button", { name: "加入队列 (4)" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     expect(createdBody).toEqual({
-      parse_id: "parse-test",
+      parse_id: "parse-retry-2",
       entry_ids: ["part-0", "part-1", "part-2", "part-3"],
       quality: "1440",
       mode: "video",

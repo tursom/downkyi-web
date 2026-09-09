@@ -556,7 +556,8 @@ def test_service_bounds_and_rejects_bad_protocol(monkeypatch, output):
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_parse_timeout_and_cancel_terminate_process_group(monkeypatch, cancel):
+@pytest.mark.parametrize("operation", ["parse", "retry"])
+def test_parse_timeout_and_cancel_terminate_process_group(monkeypatch, cancel, operation):
     original_spawn = asyncio.create_subprocess_exec
     processes, descendants = [], []
     ready = asyncio.Event()
@@ -582,7 +583,9 @@ time.sleep(60)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
 
     async def run():
-        task = asyncio.create_task(media.MediaService(SimpleNamespace()).parse(URL))
+        service = media.MediaService(SimpleNamespace())
+        request = service.parse(URL) if operation == "parse" else service.retry([URL])
+        task = asyncio.create_task(request)
         if cancel:
             await ready.wait()
             task.cancel()

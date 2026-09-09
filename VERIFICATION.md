@@ -1,5 +1,56 @@
 # Delivery Verification
 
+## Video-to-Collection Parsing Fix
+
+- Reproduced `av116605745239789` returning one entry on the NAS. The Bilibili
+  view response identified UGC season 7839144; yt-dlp's video extractor only
+  expanded multipart videos, ignoring this parent-collection relationship.
+- Root AV/BV links now discover the collection once and reuse the existing
+  paginated extractor. Short links are resolved first. Explicit `p` selection
+  and actual download jobs keep individual-video behavior.
+- Episode titles, durations and covers from collection metadata survive failed
+  per-video extraction. Requests are spaced during parsing; unavailable items
+  and rate-limit errors remain explicit rather than exposing invented formats.
+- Added 18 regression cases. The complete host backend suite passed 220 tests.
+  Earlier core discovery changes also passed 219 tests on Python 3.12; the new
+  metadata-preservation case is included in the final host run and CI suite.
+- Live verification returned `合集·人民的名义-2026版`, 58 unique URLs including
+  `BV1HqL16BEeF`, no blank titles and no truncation, in about 71 seconds.
+  32 entries were available; 26 had upstream rate-limit errors. Collection
+  membership expanded correctly without claiming all media was accessible.
+
+## Root Container Runtime Update
+
+- Per user request, Compose now explicitly runs `user: "0:0"` and retains
+  Docker's default capabilities. Dropping all capabilities was removed so root
+  can access existing UID 1000 private application directories and NAS files.
+- The Dockerfile now also declares root as its default runtime user. The NAS
+  was immediately recreated using the existing pinned image with Compose's
+  user override; a new image publication is not required for this runtime fix.
+- NAS verification returned `uid=0(root) gid=0(root)` and healthy status.
+  The actual backend directory validator passed temporary write/fsync/delete
+  checks in `/downloads`, `/export` and `/export/media`.
+- The base Compose mount checker passed as root, and Dockerfile build checks
+  completed without warnings. Existing data, ownership, directory permissions
+  and the user's selected default download directory were not changed by this
+  operation. This supersedes the earlier UID 1000 deployment configuration.
+
+## NAS Deployment
+
+- Deployed to `nas` (`192.168.0.138`) in `/opt/downkyi` from the successful GHCR
+  publication of commit `3cc1762c789198b29967f7877e64ecfc37df33b8`.
+  The image is pinned by digest; details are recorded in `deploy/NAS.md`.
+- The NAS-specific Compose override adds `/export:/export` to the base two bind
+  mounts. Container inspection confirmed all three mounts are `Type=bind`.
+- `docker compose up -d --wait` completed with a healthy container. Port 8511 is
+  available over the LAN in the existing requested no-token mode.
+- UID 1000 write/read/delete probes passed in `/data` and `/downloads`. `/export`
+  is readable and traversable, but its root is not writable by the container user.
+  Existing NAS ownership and permissions were preserved.
+- Real-browser checks at 1440, 390 and 320px passed against the NAS, including
+  no-token access, settings, system status and live Bilibili video parsing.
+- The former native service and its data were not migrated or removed.
+
 ## Export Mount Removal
 
 - Compose now binds only `./docker-data:/data` and `./downloads:/downloads`.

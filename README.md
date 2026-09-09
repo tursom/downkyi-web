@@ -6,7 +6,7 @@
 
 ## 功能
 
-- BV / AV 号、视频链接、分 P、b23.tv 短链、番剧 EP / SS、合集和收藏夹链接解析。具体可用性取决于上游接口、网络、地区和当前账户权限。
+- BV / AV 号、视频链接、分 P、b23.tv 短链、番剧 EP / SS、合集和收藏夹链接解析。普通视频链接会识别并展开所属 UGC 合集；显式带 `?p=` 的链接只解析指定分 P。具体可用性取决于上游接口、网络、地区和当前账户权限。
 - 从真实解析结果选择画质、视频编码、仅音频模式、封面和可用字幕；不会假定登录即拥有某种画质或付费内容权限。
 - SQLite 持久化队列，并发 1–4；暂停、继续、重新解析重试、服务重启恢复未完成任务。
 - 下载与合并校验分开显示；FFmpeg/ffprobe 验证通过后才公布输出文件。
@@ -24,7 +24,6 @@ Compose 从 GitHub Container Registry 拉取 `ghcr.io/tursom/downkyi-web:latest`
 
 ```sh
 sudo mkdir -p ./docker-data ./downloads
-sudo chown 1000:1000 ./docker-data ./downloads
 sudo chmod 700 ./docker-data ./downloads
 docker compose pull
 docker compose up -d
@@ -39,7 +38,9 @@ docker compose exec downloader cat /data/admin-token
 | `./docker-data` | `/data` | SQLite、配置、登录凭据和任务锁 |
 | `./downloads` | `/downloads` | 默认下载文件与续传文件 |
 
-文件直接保存在宿主机，重建容器不会清空。两个绑定都禁止 Docker 自动创建缺失的源目录，避免误写位置或生成错误权限的目录。具备 Node.js 的开发/验收机器可在拉取镜像后运行 `node scripts/check-bind-mounts.mjs`，验证实际挂载和 UID 1000 权限；脚本默认使用 Compose 的镜像，可用 `DOWNKYI_CHECK_IMAGE` 指定已有本地测试镜像。
+部署到 `nas` 的 `/opt/downkyi` 时，额外使用 `deploy/compose.nas.yaml` 挂载 `/export`，具体配置与运维命令见 [NAS 部署记录](deploy/NAS.md)。
+
+文件直接保存在宿主机，重建容器不会清空。两个绑定都禁止 Docker 自动创建缺失的源目录，避免误写位置或生成错误权限的目录。具备 Node.js 的开发/验收机器可在拉取镜像后运行 `node scripts/check-bind-mounts.mjs`，验证实际挂载和 root 用户读写权限；脚本默认使用 Compose 的镜像，可用 `DOWNKYI_CHECK_IMAGE` 指定已有本地测试镜像。
 
 可创建 `.env`，参照 `.env.example`：
 
@@ -48,14 +49,14 @@ docker compose exec downloader cat /data/admin-token
 - `DOWNKYI_ADMIN_TOKEN`：令牌模式下至少 16 字符，建议 `openssl rand -hex 32` 生成。不设置则自动生成并持久保存。
 - `DOWNKYI_BIND=0.0.0.0`：允许局域网访问。不要把 HTTP 服务直接暴露到公网。
 - `DOWNKYI_PORT=8511`：宿主机端口。
-- `DOWNKYI_DOWNLOAD_DIR=/downloads`：未保存 Web 设置时使用的初始默认目录。可以在「偏好设置 → 下载设置」修改并持久保存，保存后以 Web 设置为准。容器内使用 `/downloads` 或其下已存在且 UID 1000 有写权限的子目录。需要保存到 NAS 的其他专用目录时，修改 Compose 中 `/downloads` 对应的宿主机 `source`，容器内路径仍保持 `/downloads`。
+- `DOWNKYI_DOWNLOAD_DIR=/downloads`：未保存 Web 设置时使用的初始默认目录。可以在「偏好设置 → 下载设置」修改并持久保存，保存后以 Web 设置为准。容器内使用 `/downloads` 或其下已存在且可写的子目录。需要保存到 NAS 的其他专用目录时，修改 Compose 中 `/downloads` 对应的宿主机 `source`，容器内路径仍保持 `/downloads`。
 - `DOWNKYI_SECURE_COOKIE=1`：经过 HTTPS 反向代理时启用，普通 HTTP 下不要设置为 1。
 
 通过 HTTPS 访问时参考 `deploy/nginx.conf`，替换域名和证书，并保留原始 Host。二维码轮询和解析走同源 API，解析反代超时应大于 180 秒。默认不信任代理提供的客户端 IP，因此经代理的登录限速按代理地址共享。
 
-容器以 UID/GID 1000 的非 root 用户运行；只给应用专用目录授权，不要递归修改整个共享目录的所有权或权限。默认仅绑定数据和下载目录，不挂载整个 `/export`。实际写入权限由宿主机决定，目录绑定不会绕过文件系统的只读或权限限制。SQLite 和任务锁必须保留在本地 `./docker-data`，不要将 `/data` 放到 NFS 上。
+容器以 root（UID/GID 0）运行，Compose 显式设置 `user: "0:0"`，并保留 Docker 默认 capabilities，以便访问 NAS 上不同所有者的文件。无需将现有数据或共享目录改成 UID 1000，也未启用 privileged 模式。默认仅绑定数据和下载目录；NAS 专用配置额外挂载 `/export`。SQLite 和任务锁保留在本地 `./docker-data`，不要将 `/data` 放到 NFS 上。
 
-本机运行的 `./data` 和旧 Docker 卷不会自动迁移或删除。下载记录保存每个任务原来的绝对路径；跨宿主机/容器迁移时，必须让原路径仍可访问，或单独进行离线路径迁移。仅复制媒体并修改默认目录不会重定位旧任务。迁移前停止原应用、备份完整数据与下载文件，检查目标 UID 1000 权限；不要同时运行两个实例写入同一份数据。若原服务仍占用 8511，先停止原服务或为容器选择其他 `DOWNKYI_PORT`。
+本机运行的 `./data` 和旧 Docker 卷不会自动迁移或删除。下载记录保存每个任务原来的绝对路径；跨宿主机/容器迁移时，必须让原路径仍可访问，或单独进行离线路径迁移。仅复制媒体并修改默认目录不会重定位旧任务。迁移前停止原应用、备份完整数据与下载文件，检查目标路径可访问且可写；不要同时运行两个实例写入同一份数据。若原服务仍占用 8511，先停止原服务或为容器选择其他 `DOWNKYI_PORT`。
 
 更新镜像时，先停止服务并备份数据与下载文件，然后执行 `docker compose pull` 和 `docker compose up -d`。恢复旧镜像前也应确认数据库及任务路径兼容，不要将更换镜像当作自动数据回滚。
 
@@ -146,7 +147,7 @@ systemd 部署可在 `/etc/downkyi-web.env` 中设置 `DOWNKYI_AUTH_MODE=none`�
 
 1. 默认使用服务器访问口令进入工作空间，免令牌模式则直接进入。该凭据与 B 站账户无关。
 2. 可在偏好设置中扫码登录，或导入仅含 B 站域名的 Netscape Cookie。扫码图片由服务器生成，不需要服务器安装桌面或浏览器。导入前会验证登录状态，无效凭据不会覆盖原凭据。
-3. 点击新建下载，粘贴链接解析。单次最多解析 100 项；超出会显示截断提示。解析结果保存一小时，过期需重做；网络解析最长 180 秒。
+3. 点击新建下载，粘贴链接解析。普通视频若属于 UGC 合集，会列出所属合集的项目；不属于合集时保持原有单视频或分 P 行为。显式 `?p=` 链接保留单 P 选择。若暂时无法读取所属合集信息，会显示提示并继续解析当前视频。单次最多解析 100 项；超出会显示截断提示。解析结果保存一小时，过期需重做；网络解析最长 180 秒。
 4. 选择项目、画质、编码和附件，检查确认页后加入队列。每批最多 50 个任务，未完成队列最多 500 个。
 5. 在任务表格里暂停/继续/重试。暂停保留 `.part` 等续传文件；如果上游支持恢复，重试会利用保留的数据。
 6. 在文件库中查看服务器真实文件并下载到当前电脑。下载目录按任务 ID 隔离，内部使用稳定的 `media.ext` 文件名保证重试续传；网页显示对应的视频标题，避免不同任务覆盖。

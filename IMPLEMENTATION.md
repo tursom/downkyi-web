@@ -38,6 +38,8 @@ qualities are actual available stream heights, not presumed permissions. Codes a
 
 backend/media.py implements MediaService and CLI for isolated yt-dlp work. Constructor MediaService(config), config has data_dir,download_dir. Public async parse(url:str,cookie_path:Path|None) -> dict {title,thumbnail,entries,truncated,warnings} (without cache id). Parent manages snapshots so method must not expose cookies. Expose normalize_url(url) async if convenient.
 
+Root BV/AV video URLs without an explicit `p` query discover their UGC collection through the restricted Bilibili view API, then reuse the existing paginated collection extractor. Discovery runs once per parse, after short-link resolution; child videos and download workers do not rediscover collections. Embedded episode titles/durations/covers are retained when a child cannot be extracted. Metadata discovery failures produce a safe warning and fall back to the original video. Parsing spaces extractor requests by 250ms; the existing 100-entry and 180-second limits still apply.
+
 Download subprocess invocation:
 `python -m backend.media download JOB_JSON_PATH`
 JOB JSON = {url,output_dir,cookie_path|null,quality,mode,codec,subtitles,cover}

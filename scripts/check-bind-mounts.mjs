@@ -9,6 +9,8 @@ assert.equal(Object.keys(config.volumes || {}).length, 0, 'Named volumes are not
 const service = config.services.downloader;
 assert.ok(service.image, 'Compose must use a prebuilt image');
 assert.equal(service.build, undefined, 'Compose must not build on the deployment host');
+assert.equal(service.user, '0:0', 'DownKyi must run as root');
+assert.equal(service.cap_drop?.includes('ALL') ?? false, false, 'Keep Docker default file access capabilities');
 assert.equal(service.volumes.length, 2);
 assert.deepEqual(service.volumes.map(mount => mount.target).sort(), ['/data', '/downloads']);
 for (const mount of service.volumes) {
@@ -19,14 +21,14 @@ assert.equal(service.environment.DOWNKYI_DATA_DIR, '/data');
 
 const image = process.env.DOWNKYI_CHECK_IMAGE || service.image;
 const name = `downkyi-bind-check-${process.pid}`;
-const args = ['create', '--name', name, '--network', 'none', '--user', '1000:1000', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true'];
+const args = ['create', '--name', name, '--network', 'none', '--user', service.user, '--security-opt', 'no-new-privileges:true'];
 for (const mount of service.volumes) {
   args.push('--mount', `type=bind,source=${mount.source},target=${mount.target}`);
 }
 args.push('--entrypoint', 'python', image, '-c', `
 import json, os, uuid
 from pathlib import Path
-assert os.getuid() == 1000
+assert os.getuid() == 0 and os.getgid() == 0
 assert not Path('/export').exists()
 for root in ('/data', '/downloads'):
     path = Path(root) / ('.bind-check-' + uuid.uuid4().hex)

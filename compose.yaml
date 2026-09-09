@@ -1,6 +1,7 @@
 services:
   downloader:
     image: "${DOWNKYI_IMAGE:-ghcr.io/tursom/downkyi-web:latest}"
+    user: "0:0"
     init: true
     restart: unless-stopped
     ports:
@@ -25,8 +26,6 @@ services:
     stop_grace_period: 30s
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
     logging:
       driver: json-file
       options:

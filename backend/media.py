@@ -44,9 +44,10 @@ RATE_ERROR = "Bilibili 请求受到限制，请稍后重试。"
 AUTH_ERROR = "该内容需要有效登录或相应权限，请更新登录凭据后重试。"
 UNAVAILABLE_ERROR = "该内容已失效或受地区限制，暂时无法访问。"
 DISK_ERROR = "磁盘空间不足，请清理空间后重试。"
+COLLECTION_ERROR = "未能确认视频所属合集，本次仅解析当前视频。"
 SAFE_ERRORS = {UNSUPPORTED, NETWORK_ERROR, TIMEOUT_ERROR, NO_FORMATS, FORMAT_ERROR,
                VALIDATION_ERROR, DEPENDENCY_ERROR, GENERIC_ERROR, RATE_ERROR,
-               AUTH_ERROR, UNAVAILABLE_ERROR, DISK_ERROR}
+               AUTH_ERROR, UNAVAILABLE_ERROR, DISK_ERROR, COLLECTION_ERROR}
 BV = r"BV[0-9A-Za-z]{10}"
 VIDEO_ID = rf"(?:{BV}|av[1-9][0-9]*)"
 EXTRACTOR_NAMES = (
@@ -244,6 +245,56 @@ class _NetworkGuard(urllib.request.BaseHandler):
     data_request = http_request
 
 
+def _video_collection(ydl, url: str) -> tuple[str, dict] | None:
+    """Discover a root video's UGC season; playlist children and downloads skip this."""
+    parsed = urlsplit(url)
+    match = re.fullmatch(rf"/video/({VIDEO_ID})", parsed.path)
+    if not match or "p" in parse_qs(parsed.query):
+        return None
+    from yt_dlp.networking import Request
+
+    identity = match[1]
+    query = f"bvid={identity}" if identity.startswith("BV") else f"aid={identity[2:]}"
+    try:
+        request = Request(f"https://api.bilibili.com/x/web-interface/view?{query}",
+                          headers={"Referer": "https://www.bilibili.com/"})
+        with ydl.urlopen(request) as response:
+            payload = response.read(8 * 1024 * 1024 + 1)
+        if len(payload) > 8 * 1024 * 1024:
+            raise ValueError(COLLECTION_ERROR)
+        result = json.loads(payload)
+        if result.get("code") != 0 or not isinstance(result.get("data"), dict):
+            raise ValueError(COLLECTION_ERROR)
+        data = result["data"]
+        season = data.get("ugc_season") or {}
+        sid = season.get("id") or data.get("season_id")
+        if not sid:
+            return None
+        mid = season.get("mid") or (data.get("owner") or {}).get("mid")
+        if not all(re.fullmatch(r"[1-9][0-9]{0,19}", str(value)) for value in (mid, sid)):
+            raise ValueError(COLLECTION_ERROR)
+        collection_url = canonical_url(f"https://space.bilibili.com/{mid}/channel/collectiondetail?sid={sid}",
+                                       allow_short=False)
+        metadata = {}
+        for section in season.get("sections") or []:
+            if not isinstance(section, dict):
+                continue
+            for episode in section.get("episodes") or []:
+                if not isinstance(episode, dict) or not re.fullmatch(BV, str(episode.get("bvid", ""))):
+                    continue
+                arc = episode.get("arc")
+                arc = arc if isinstance(arc, dict) else {}
+                metadata[f"https://www.bilibili.com/video/{episode['bvid']}"] = {
+                    "title": episode.get("title") or arc.get("title"),
+                    "duration": arc.get("duration"), "thumbnail": arc.get("pic"),
+                }
+        return collection_url, metadata
+    except Exception:
+        # Metadata discovery must not prevent an otherwise playable video from parsing.
+        ydl.report_warning(COLLECTION_ERROR)
+        return None
+
+
 def _make_ydl(options: dict):
     from yt_dlp import YoutubeDL
     from yt_dlp.extractor import bilibili
@@ -268,6 +319,20 @@ def _make_ydl(options: dict):
                 raise ValueError(UNSUPPORTED)
             if not any(ie.suitable(normalized) for ie in self._ies.values()):
                 raise ValueError(UNSUPPORTED)
+            if self.params.pop("downkyi_expand_collection", False):
+                collection = _video_collection(self, normalized)
+                if collection:
+                    collection_url, metadata = collection
+                    playlist = self.extract_info(collection_url, *args, **kwargs)
+                    if isinstance(playlist, dict) and playlist.get("_type") == "playlist":
+                        def annotated_entries():
+                            for entry in playlist.get("entries") or []:
+                                if isinstance(entry, dict):
+                                    yield {**metadata.get(entry.get("url"), {}), **entry}
+                                else:
+                                    yield entry
+                        return {**playlist, "entries": annotated_entries()}
+                    return playlist
             return super().extract_info(normalized, *args, **kwargs)
 
         def urlopen(self, req):
@@ -352,7 +417,8 @@ def parse_media(url: str, cookie_path=None) -> dict:
     url = _resolve_url(url)
     logger = _Logger()
     options = _base_options(cookie_path, logger)
-    options.update({"writesubtitles": True, "listsubtitles": True, "lazy_playlist": True})
+    options.update({"writesubtitles": True, "listsubtitles": True, "lazy_playlist": True,
+                    "downkyi_expand_collection": True, "sleep_interval_requests": 0.25})
     entries, seen = [], set()
     truncated = False
     visited = 0

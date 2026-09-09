@@ -1,0 +1,10 @@
+# NAS-only override. On the NAS, copy this beside compose.yaml as compose.override.yaml.
+services:
+  downloader:
+    volumes:
+      - type: bind
+        source: /export
+        target: /export
+        read_only: false
+        bind:
+          create_host_path: false

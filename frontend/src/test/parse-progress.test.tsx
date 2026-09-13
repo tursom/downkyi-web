@@ -90,7 +90,11 @@ describe("real parse progress UI", () => {
   it("shows retry events in the existing picker pending area and preserves the picker, scroll and selection", async () => {
     const feed = parseFeed();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(retryParsed)).mockResolvedValueOnce(feed.response));
-    mount(); submit(); await screen.findByText("测试合集");
+    mount();
+    // Flush the initial step transition and its focus/scroll effect before
+    // observing whether the subsequent retry changes the scroll position.
+    await act(async () => { submit(); });
+    await screen.findByText("测试合集");
     const picker = screen.getByRole("region", { name: "下载项目" });
     const dialog = screen.getByRole("dialog");
     dialog.scrollTop = 120; dialog.scrollTo = vi.fn();

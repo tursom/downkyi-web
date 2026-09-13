@@ -291,6 +291,28 @@
   min-width: 0;
   cursor: inherit;
 }
+.discovery-choice {
+  padding: 10px 0;
+  cursor: pointer;
+  border-bottom: 1px solid #e6ece8;
+}
+.discovery-choice > .thumbnail {
+  width: clamp(40px, 10vw, 80px);
+  flex-shrink: 0;
+}
+.workflow-input > .picker-heading h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workflow-input > .picker-heading > button {
+  flex-shrink: 0;
+}
+.workflow-input > p,
+.workflow-input .entry-picker > p {
+  font-size: 12px;
+  color: #5f7d73;
+  line-height: 1.8;
+}
 .entry-choice > svg,
 .entry-choice > input,
 .entry-retry {

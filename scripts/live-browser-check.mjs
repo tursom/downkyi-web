@@ -48,7 +48,7 @@ try {
     await navigate('下载队列');
     await page.getByRole('button',{name:'新建下载',exact:true}).first().click();
     await page.getByLabel('视频、合集、番剧链接或 BV / AV 号',{exact:true}).fill('https://www.bilibili.com/video/BV1bK411W797?p=1');
-    await page.getByRole('button',{name:'解析',exact:true}).click();
+    await page.getByRole('button',{name:'读取列表',exact:true}).click();
     await page.getByRole('heading',{name:'下载规格',exact:true}).waitFor({timeout:190000});
     await page.waitForFunction(()=>[...document.images].every(image=>image.complete&&image.naturalWidth>0),{timeout:30000});
     await page.screenshot({path:`${directory}/parse-${width}.png`,fullPage:true});

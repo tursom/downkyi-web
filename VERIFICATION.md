@@ -1,5 +1,25 @@
 # Delivery Verification
 
+## Discover First, Resolve Selected Entries
+
+- Added metadata-only discovery and server-validated resolution of 1–50 selected
+  cached entries. Pending entries cannot be admitted or included in failed-item
+  retry; resolving returns a new snapshot and preserves unselected entries.
+- Legacy full parse remains available for compatibility. New discovery retains
+  multipart, UGC collection, series, favorites, bangumi and short-link support
+  without requesting playback formats. Progress and cancellation remain active.
+- Backend: 307 tests passed, including metadata-only request assertions, selected
+  resolution, cache/identity validation, pending admission rejection and cleanup.
+- Frontend: 117 tests passed, TypeScript/Vite build passed, and 122 browser
+  checks passed across four widths. Multi-entry lists start unchecked; only
+  explicit selections resolve. Single entries auto-resolve, successful metadata
+  is reused on return, and pending items remain outside specs/admission scope.
+- Live discovery of av116605745239789 returned 59 pending entries in about 4.2s
+  with no formats; resolving the target video alone returned one ready entry
+  with 1080/720/480/360P in about 2.1s.
+- Live discovery of BV1bK411W797 returned 23 pending P entries in about 0.2s,
+  all with distinct `?p=` URLs and no format extraction. No tasks were created.
+
 ## Live Parse Progress
 
 - Parse and retry support optional NDJSON progress without changing default JSON

@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from "vitest";
 import App from "../App";
 import ParseModal, { PARSE_TIMEOUT_MS } from "../ParseModal";
 import Tasks from "../Tasks";
-import { parsed, respond, system, task } from "./fixtures";
+import { discovered, parsed, respond, system, task } from "./fixtures";
 import type { Task } from "../types";
 function tasksProps(tasks: Task[]) {
   return {
@@ -113,8 +113,10 @@ async function parseSource() {
     screen.getByLabelText("视频、合集、番剧链接或 BV / AV 号"),
     " BVtest ",
   );
-  await user.click(screen.getByRole("button", { name: "解析" }));
+  await user.click(screen.getByRole("button", { name: "读取列表" }));
   await screen.findByText("测试合集");
+  await user.click(screen.getByRole("button", { name: "全选" }));
+  await user.click(screen.getByRole("button", { name: /解析所选项目/ }));
   return user;
 }
 describe("three-step parse and create", () => {
@@ -122,6 +124,7 @@ describe("three-step parse and create", () => {
     const onCreated = vi.fn(),
       fetch = vi
         .fn()
+        .mockResolvedValueOnce(respond(discovered()))
         .mockResolvedValueOnce(respond(parsed))
         .mockResolvedValueOnce(respond({ tasks: [task] }));
     vi.stubGlobal("fetch", fetch);
@@ -146,7 +149,7 @@ describe("three-step parse and create", () => {
     expect(screen.getByLabelText("画质")).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "确认规格" }));
     expect(screen.getByText("准备添加 1 个下载任务")).toBeVisible();
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
     await user.click(screen.getByRole("button", { name: "上一步" }));
     expect(screen.getByLabelText("视频编码")).toHaveValue("av1");
     await user.click(screen.getByRole("button", { name: "确认规格" }));
@@ -154,10 +157,10 @@ describe("three-step parse and create", () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(1));
     expect(fetch).toHaveBeenNthCalledWith(
       1,
-      "/api/parse",
+      "/api/discover",
       expect.objectContaining({ body: '{"url":"BVtest"}' }),
     );
-    const body = JSON.parse(fetch.mock.calls[1][1].body);
+    const body = JSON.parse(fetch.mock.calls[2][1].body);
     expect(body).toEqual({
       parse_id: "parse-1",
       entry_ids: ["p1"],
@@ -171,6 +174,7 @@ describe("three-step parse and create", () => {
   it("lets the server reject duplicates and retains review choices on 409", async () => {
     const fetch = vi
       .fn()
+      .mockResolvedValueOnce(respond(discovered()))
       .mockResolvedValueOnce(respond(parsed))
       .mockResolvedValueOnce(respond({ detail: "任务已存在" }, 409));
     vi.stubGlobal("fetch", fetch);
@@ -192,9 +196,9 @@ describe("three-step parse and create", () => {
       screen.getByLabelText("视频、合集、番剧链接或 BV / AV 号"),
       "invalid",
     );
-    await user.click(screen.getByRole("button", { name: "解析" }));
+    await user.click(screen.getByRole("button", { name: "读取列表" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("视频不存在");
-    expect(screen.getByRole("button", { name: "解析" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "读取列表" })).toBeEnabled();
   });
   it("admits at most 50 entries and handles audio-only sources", async () => {
     vi.stubGlobal(
@@ -212,13 +216,12 @@ describe("three-step parse and create", () => {
     );
     render(<ParseModal onClose={vi.fn()} onCreated={vi.fn()} />);
     const user = await parseSource();
-    expect(screen.getByRole("button", { name: "仅音频" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await user.click(screen.getByRole("checkbox", { name: "选择花絮" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("单次最多创建 50");
-    expect(screen.getByRole("button", { name: "确认规格" })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("单次最多解析 50");
+    expect(screen.getByRole("button", { name: /解析所选项目/ })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "音频 50" }));
+    await user.click(screen.getByRole("button", { name: /解析所选项目/ }));
+    expect(screen.getByRole("button", { name: "仅音频" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "确认规格" })).toBeEnabled();
   });
   it.each(["cancel", "timeout", "unmount"] as const)(
     "aborts pending parse on %s without stale updates",
@@ -233,7 +236,7 @@ describe("three-step parse and create", () => {
         screen.getByLabelText("视频、合集、番剧链接或 BV / AV 号"),
         { target: { value: "BVtest" } },
       );
-      fireEvent.click(screen.getByRole("button", { name: "解析" }));
+      fireEvent.click(screen.getByRole("button", { name: "读取列表" }));
       const signal = (
         fetch.mock.calls as unknown as [string, RequestInit][]
       )[0][1].signal!;

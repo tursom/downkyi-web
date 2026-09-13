@@ -410,6 +410,7 @@ def _entry(info: dict, url: str, group: str, error=None) -> dict:
         "title": _text(info.get("title")), "url": url,
         "duration": _number(info.get("duration")), "thumbnail": _thumbnail(info.get("thumbnail")),
         "group": _text(group), "available": available,
+        "resolution": "ready" if available else "failed",
         "error": sanitize_error(error) if error else (None if available else NO_FORMATS),
         "qualities": sorted(heights, reverse=True) if available else [],
         "codecs": (["auto"] + sorted(codecs)) if available else [],
@@ -444,7 +445,8 @@ def parse_media(url: str, cookie_path=None, *, expand_collection=True, on_progre
     logger = _Logger()
     options = _base_options(cookie_path, logger)
     options.update({"writesubtitles": True, "listsubtitles": True, "lazy_playlist": True,
-                    "downkyi_expand_collection": expand_collection, "sleep_interval_requests": 0.25})
+                    "downkyi_expand_collection": expand_collection, "noplaylist": not expand_collection,
+                    "sleep_interval_requests": 0.25})
     visited = 0
     with _make_ydl(options) as ydl:
         root = ydl.extract_info(url, download=False, process=False)
@@ -623,7 +625,7 @@ class _ParseProtocol:
                 raise RuntimeError(GENERIC_ERROR)
             if self.previous:
                 entries = result["entries"]
-                succeeded = sum(bool(entry["available"]) for entry in entries)
+                succeeded = sum(bool(entry["available"]) or entry.get("resolution") == "pending" for entry in entries)
                 if (self.previous["completed"] != len(entries)
                         or (self.previous["total"] != len(entries)
                             and not (result.get("truncated") is True and self.previous["total"] is None))
@@ -643,6 +645,9 @@ class MediaService:
     async def parse(self, url: str, cookie_path: Path | None = None, *, on_progress=None) -> dict:
         """on_progress, when supplied, is awaited with each progress dictionary."""
         return await self._extract("parse", {"url": canonical_url(url)}, cookie_path, on_progress)
+
+    async def discover(self, url: str, cookie_path: Path | None = None, *, on_progress=None) -> dict:
+        return await self._extract("discover", {"url": canonical_url(url)}, cookie_path, on_progress)
 
     async def retry(self, urls: list[str], cookie_path: Path | None = None, *, on_progress=None) -> dict:
         """on_progress follows the same asynchronous contract as parse."""
@@ -890,7 +895,7 @@ class _ParseTimeout(BaseException):
 def main(argv=None) -> int:
     args = sys.argv[1:] if argv is None else argv
     try:
-        if len(args) != 2 or args[0] not in ("parse", "retry", "download"):
+        if len(args) != 2 or args[0] not in ("discover", "parse", "retry", "download"):
             raise ValueError(GENERIC_ERROR)
         if args[0] == "download":
             with open(args[1], "rb") as file:
@@ -910,7 +915,7 @@ def main(argv=None) -> int:
                 _emit(event)
 
         with open(os.devnull, "w") as sink:
-            if args[0] in ("parse", "retry"):
+            if args[0] in ("discover", "parse", "retry"):
                 def timed_out(signum, frame):
                     raise _ParseTimeout(TIMEOUT_ERROR)
                 previous_handler = signal.signal(signal.SIGALRM, timed_out)
@@ -919,7 +924,10 @@ def main(argv=None) -> int:
                     with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                         progress_options = ({"on_progress": lambda value: emit({"event": "progress", "progress": value})}
                                             if payload.get("progress") is True else {})
-                        if args[0] == "retry":
+                        if args[0] == "discover":
+                            from .discovery import discover_media
+                            result = discover_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
+                        elif args[0] == "retry":
                             result = retry_media(payload.get("urls"), payload.get("cookie_path"), **progress_options)
                         else:
                             result = parse_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)

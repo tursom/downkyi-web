@@ -34,6 +34,7 @@ export interface Task {
   download_dir?: string;
 }
 export interface ParsedEntry {
+  resolution?: "pending" | "ready" | "failed";
   id: string;
   title: string;
   url: string;

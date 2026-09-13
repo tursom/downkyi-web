@@ -125,7 +125,7 @@ class DownloadManager:
             created = []
             for entry_id in request.entry_ids:
                 entry = entries[entry_id]
-                if not entry["available"]:
+                if entry.get("resolution") == "pending" or not entry["available"]:
                     raise ServiceError(422, "包含失效或不可下载的项目")
                 source_key = hashlib.sha256(f'{entry["url"]}\n{request.mode}'.encode()).hexdigest()
                 if source_key in existing:

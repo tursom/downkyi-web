@@ -3,7 +3,7 @@ import { useState, type ReactNode } from "react";
 import { duration } from "./format";
 import type { DownloadMode, ParsedEntry } from "./types";
 export function eligible(entry: ParsedEntry, mode: DownloadMode) {
-  return entry.available && (mode === "audio" || entry.qualities.length > 0);
+  return entry.resolution !== "pending" && entry.resolution !== "failed" && entry.available && (mode === "audio" || entry.qualities.length > 0);
 }
 export function qualityName(value: number | string) {
   return value === "best"
@@ -41,7 +41,7 @@ export default function EntryPicker({
       .toLowerCase()
       .includes(query.trim().toLowerCase()),
   );
-  const failed = entries.filter((entry) => !entry.available);
+  const failed = entries.filter((entry) => entry.resolution === "failed" || (entry.resolution === undefined && !entry.available));
   const available = entries.filter((entry) => eligible(entry, mode));
   const count = available.filter((entry) => selected.includes(entry.id)).length;
   return (

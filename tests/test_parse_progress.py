@@ -330,7 +330,8 @@ raise SystemExit(media.main())
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_http_timeout_kills_real_worker_and_cleans_cookie(tmp_path, monkeypatch, streaming):
+@pytest.mark.parametrize("endpoint", ["parse", "discover"])
+def test_http_timeout_kills_real_worker_and_cleans_cookie(tmp_path, monkeypatch, streaming, endpoint):
     spawn_original = asyncio.create_subprocess_exec
     processes = []
     monkeypatch.setattr(media, "PARSE_TIMEOUT", 0.2)
@@ -351,7 +352,7 @@ time.sleep(60)
     with TestClient(app) as client:
         login(client)
         for _ in range(3):
-            response = client.post("/api/parse", json={"url": URL}, headers=HEADERS if streaming else {})
+            response = client.post(f"/api/{endpoint}", json={"url": URL}, headers=HEADERS if streaming else {})
             if streaming:
                 events = [json.loads(line) for line in response.iter_lines()]
                 assert events[-1]["event"] == "error" and events[-1]["status"] == 504

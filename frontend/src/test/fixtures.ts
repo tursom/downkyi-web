@@ -137,6 +137,9 @@ export function parseFeed() {
     end() { if (!cancelled) controller.close(); },
   };
 }
+export function discovered(source: ParseResult = parsed): ParseResult {
+  return { ...source, id: `discover-${source.id}`, warnings: [], entries: source.entries.map((entry) => ({ ...entry, resolution: "pending", available: false, qualities: [], codecs: [], error: null })) };
+}
 export function respond(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status });
 }

@@ -40,6 +40,10 @@ class RetryParseInput(InputModel):
     entry_ids: list[str] = Field(min_length=1, max_length=100)
 
 
+class ResolveParseInput(InputModel):
+    entry_ids: list[str] = Field(min_length=1, max_length=50)
+
+
 class NewTasks(InputModel):
     parse_id: str = Field(min_length=1, max_length=100)
     entry_ids: list[str] = Field(min_length=1, max_length=50)
@@ -270,8 +274,22 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
         return await run_parse(request, lambda cookie, progress:
                                invoke(app.state.media.parse, body.url, cookie, progress))
 
+    @api.post("/discover")
+    async def discover(body: ParseInput, request: Request):
+        from .media import canonical_url
+        canonical_url(body.url)
+        return await run_parse(request, lambda cookie, progress:
+                               invoke(app.state.media.discover, body.url, cookie, progress))
+
+    @api.post("/parse/{parse_id}/resolve")
+    async def resolve_parse(parse_id: str, body: ResolveParseInput, request: Request):
+        return await refresh_parse(parse_id, body, request, resolving=True)
+
     @api.post("/parse/{parse_id}/retry")
     async def retry_parse(parse_id: str, body: RetryParseInput, request: Request):
+        return await refresh_parse(parse_id, body, request)
+
+    async def refresh_parse(parse_id, body, request, *, resolving=False):
         original = app.state.store.get_parse(parse_id)
         if not original:
             raise ServiceError(410, "解析结果已过期，请重新解析原链接")
@@ -280,8 +298,10 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
         entries = {entry["id"]: entry for entry in original["entries"]}
         if any(key not in entries for key in body.entry_ids):
             raise ServiceError(422, "包含不属于本次解析的项目")
-        if any(entries[key]["available"] for key in body.entry_ids):
-            raise ServiceError(422, "仅可重新解析失败的项目")
+        allowed = {"pending", "failed"} if resolving else {"failed"}
+        if any(entries[key].get("resolution", "ready" if entries[key]["available"] else "failed") not in allowed
+               or entries[key]["available"] for key in body.entry_ids):
+            raise ServiceError(422, "仅可解析待解析或失败的项目" if resolving else "仅可重新解析失败的项目")
         urls = [entries[key]["url"] for key in body.entry_ids]
 
         async def retry(cookie, progress):
@@ -299,14 +319,14 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
                 update = by_url[entry["url"]]
                 if update.get("available"):
                     merged.append({**entry, **update, "id": entry["id"],
-                                   "url": entry["url"], "group": entry["group"]})
+                                   "url": entry["url"], "group": entry["group"], "resolution": "ready"})
                 else:
-                    merged.append({**entry, "available": False, "error": update.get("error"),
+                    merged.append({**entry, "available": False, "resolution": "failed", "error": update.get("error"),
                                    "qualities": [], "codecs": [], "has_subtitles": False})
             warnings = list(dict.fromkeys(warning for warning in
                 [*original.get("warnings", []), *refreshed.get("warnings", [])]
                 if warning != PARTIAL_WARNING))
-            if any(not entry["available"] for entry in merged):
+            if any(not entry["available"] and entry.get("resolution") != "pending" for entry in merged):
                 warnings.append(PARTIAL_WARNING)
             return {**original, "entries": merged, "warnings": warnings}
 

@@ -9,6 +9,7 @@ import {
   Search,
 } from "lucide-react";
 import { api, parseStream, ApiError, errorMessage, isAbort } from "./api";
+import DiscoveryPicker from "./DiscoveryPicker";
 import ParseProgressView from "./ParseProgressView";
 import { ErrorNotice, Modal, Spinner, Thumbnail } from "./components";
 import EntryPicker, { eligible } from "./EntryPicker";
@@ -30,6 +31,12 @@ export default function ParseModal({
   const [url, setUrl] = useState("");
   const [parsed, setParsed] = useState<ParseResult>();
   const [selected, setSelected] = useState<string[]>([]);
+  const [listingSelection, setListingSelection] = useState<string[]>([]);
+  const [scope, setScope] = useState<string[]>([]);
+  // Keep the complete merged cache; specs and admission only see this resolve's scope.
+  const visibleEntries = parsed?.entries.filter(
+    (entry) => scope.includes(entry.id) && entry.resolution !== "pending",
+  ) ?? [];
   const [options, setOptions] = useState<DownloadOptions>({
     quality: "best",
     mode: "video",
@@ -37,7 +44,7 @@ export default function ParseModal({
     cover: true,
     subtitles: false,
   });
-  const [busy, setBusy] = useState<"parse" | "retry" | "create" | null>(null);
+  const [busy, setBusy] = useState<"parse" | "resolve" | "retry" | "create" | null>(null);
   const [progress, setProgress] = useState<ParseProgress>();
   const [startedAt, setStartedAt] = useState(0);
   const [retryMessage, setRetryMessage] = useState("");
@@ -45,6 +52,10 @@ export default function ParseModal({
   const controller = useRef<AbortController | null>(null);
   const timeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const heading = useRef<HTMLHeadingElement>(null);
+  const progressArea = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (busy === "resolve") progressArea.current?.scrollIntoView?.({ block: "center" });
+  }, [busy]);
   useEffect(
     () => () => {
       controller.current?.abort();
@@ -57,10 +68,9 @@ export default function ParseModal({
     heading.current?.focus();
     heading.current?.closest(".dialog")?.scrollTo?.(0, 0);
   }, [step]);
-  const chosen =
-    parsed?.entries.filter(
-      (entry) => selected.includes(entry.id) && eligible(entry, options.mode),
-    ) ?? [];
+  const chosen = visibleEntries.filter(
+    (entry) => selected.includes(entry.id) && eligible(entry, options.mode),
+  );
   const specs = availableSpecs(chosen);
   const specError =
     options.mode === "video" &&
@@ -107,29 +117,22 @@ export default function ParseModal({
       setError("解析超时（180 秒），请重试或缩小内容范围。");
     }, PARSE_TIMEOUT_MS);
     try {
-      const result = await parseStream("/parse", {
+      const result = await parseStream("/discover", {
         method: "POST",
         body: { url: url.trim() },
         signal: request.signal,
       }, beginProgress(request));
       if (request.signal.aborted || controller.current !== request) return;
-      const mode = result.entries.some((entry) => eligible(entry, "video"))
-        ? "video"
-        : "audio";
       setParsed(result);
-      setOptions((previous) => ({
-        ...previous,
-        mode,
-        quality: "best",
-        codec: "auto",
-      }));
-      setSelected(
-        result.entries
-          .filter((entry) => eligible(entry, mode))
-          .slice(0, 50)
-          .map((entry) => entry.id),
-      );
-      setStep(2);
+      setSelected([]);
+      setScope([]);
+      setListingSelection(result.entries.length === 1 ? [result.entries[0].id] : []);
+      setOptions((previous) => ({ ...previous, mode: "video", quality: "best", codec: "auto" }));
+      if (result.entries.length === 1) {
+        clearTimeout(timeout.current);
+        controller.current = null;
+        await resolveEntries(result, [result.entries[0].id], true);
+      }
     } catch (cause) {
       if (!request.signal.aborted && controller.current === request && !isAbort(cause))
         setError(errorMessage(cause));
@@ -141,10 +144,69 @@ export default function ParseModal({
       }
     }
   }
+  async function resolveEntries(source: ParseResult, entryIds: string[], fresh = false) {
+    if (controller.current || !entryIds.length || entryIds.length > 50) return;
+    const ids = [...new Set(entryIds)];
+    const unresolved = source.entries.filter((entry) =>
+      ids.includes(entry.id) && (entry.resolution === "pending" ||
+        entry.resolution === "failed" || (entry.resolution === undefined && !entry.available)),
+    ).map((entry) => entry.id);
+    const request = new AbortController();
+    controller.current = request;
+    setBusy("resolve");
+    setError("");
+    setRetryMessage("");
+    timeout.current = setTimeout(() => {
+      if (controller.current !== request) return;
+      abortRequest();
+      setBusy(null);
+      setError("解析超时（180 秒），列表和选择已保留，请重试。");
+    }, PARSE_TIMEOUT_MS);
+    try {
+      const result = unresolved.length ? await parseStream(`/parse/${encodeURIComponent(source.id)}/resolve`, {
+        method: "POST", body: { entry_ids: unresolved }, signal: request.signal,
+      }, beginProgress(request)) : source;
+      if (request.signal.aborted || controller.current !== request) return;
+      const entries = result.entries.filter((entry) => ids.includes(entry.id));
+      const mode = fresh || !scope.length
+        ? (entries.some((entry) => eligible(entry, "video")) ? "video" : "audio")
+        : options.mode;
+      setParsed(result);
+      setScope(ids);
+      setOptions((previous) => ({ ...previous, mode }));
+      setSelected(entries.filter((entry) => eligible(entry, mode) &&
+        (fresh || !scope.includes(entry.id) || selected.includes(entry.id)),
+      ).map((entry) => entry.id));
+      setStep(2);
+    } catch (cause) {
+      if (!request.signal.aborted && controller.current === request && !isAbort(cause)) setError(
+        cause instanceof ApiError && cause.status === 410
+          ? "解析结果已过期，请点击「更换链接」后重新读取列表。原列表和选择已保留。"
+          : errorMessage(cause),
+      );
+    } finally {
+      if (controller.current === request) {
+        clearTimeout(timeout.current);
+        controller.current = null;
+        setBusy(null);
+      }
+    }
+  }
+  function changeLink() {
+    abortRequest();
+    setBusy(null);
+    setParsed(undefined);
+    setScope([]);
+    setSelected([]);
+    setListingSelection([]);
+    setStep(1);
+    setError("");
+    setRetryMessage("");
+  }
   async function retry(entryIds: string[]) {
     if (!parsed || busy || controller.current || step !== 2) return;
-    const ids = parsed.entries
-      .filter((entry) => !entry.available && entryIds.includes(entry.id))
+    const ids = visibleEntries
+      .filter((entry) => (entry.resolution === "failed" || (entry.resolution === undefined && !entry.available)) && entryIds.includes(entry.id))
       .slice(0, 100)
       .map((entry) => entry.id);
     if (!ids.length) return;
@@ -250,7 +312,7 @@ export default function ParseModal({
       </h3>
       {step === 1 ? (
         <div className="workflow-input">
-          <form onSubmit={(event) => void parse(event)}>
+          {!parsed && <form onSubmit={(event) => void parse(event)}>
             <label className="field-label" htmlFor="video-url">
               视频、合集、番剧链接或 BV / AV 号
             </label>
@@ -270,13 +332,23 @@ export default function ParseModal({
                 disabled={!!busy || !url.trim()}
               >
                 <Search size={16} />
-                解析
+                读取列表
               </button>
             </div>
-          </form>
-          <div className="source-placeholder">
-            {busy === "parse" ? (
+          </form>}
+          <p>先选择项目，再解析画质和资源。</p>
+          {parsed && <>
+            <div className="picker-heading"><h3>{parsed.title}</h3><button className="text-link" onClick={changeLink}>更换链接</button></div>
+            {parsed.truncated && <p role="status">列表已截断，仅显示接口返回的 {parsed.entries.length} 项。</p>}
+            {parsed.warnings.length > 0 && <div className="workflow-warnings" role="status">
+              {parsed.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
+            </div>}
+            <DiscoveryPicker entries={parsed.entries} selected={listingSelection} setSelected={setListingSelection} disabled={!!busy} />
+          </>}
+          {(busy || !parsed) && <div className="source-placeholder" ref={progressArea}>
+            {busy === "parse" || busy === "resolve" ? (
               <>
+                <strong>{busy === "parse" ? "正在读取视频列表" : "正在解析所选项目的画质和资源"}</strong>
                 <ParseProgressView progress={progress} startedAt={startedAt} />
                 <button className="button secondary" onClick={cancelParse}>
                   取消解析
@@ -288,7 +360,7 @@ export default function ParseModal({
                 <strong>等待解析内容</strong>
               </>
             )}
-          </div>
+          </div>}
         </div>
       ) : (
         parsed && (
@@ -299,8 +371,8 @@ export default function ParseModal({
                 <span className="badge completed">解析完成</span>
                 <h3>{parsed.title}</h3>
                 <p>
-                  {parsed.entries.length} 个项目 ·{" "}
-                  {parsed.entries.filter((entry) => entry.available).length}{" "}
+                  {visibleEntries.length} 个项目 ·{" "}
+                  {visibleEntries.filter((entry) => entry.available).length}{" "}
                   个可用
                 </p>
               </div>
@@ -308,12 +380,7 @@ export default function ParseModal({
                 <button
                   className="text-link"
                   disabled={!!busy}
-                  onClick={() => {
-                    if (controller.current) return;
-                    setStep(1);
-                    setError("");
-                    setRetryMessage("");
-                  }}
+                  onClick={changeLink}
                 >
                   更换链接
                   <ArrowRight size={13} />
@@ -331,7 +398,7 @@ export default function ParseModal({
             {step === 2 ? (
               <div className="workflow-columns">
                 <EntryPicker
-                  entries={parsed.entries}
+                  entries={visibleEntries}
                   selected={selected}
                   setSelected={setSelected}
                   mode={options.mode}
@@ -363,7 +430,7 @@ export default function ParseModal({
         <ErrorNotice message={error || (step > 1 ? specError : "")} />
       </div>
       <footer className="workflow-footer">
-        <span>{step > 1 ? `已选 ${chosen.length} 项` : "服务器下载空间"}</span>
+        <span>{step > 1 ? `已选 ${chosen.length} 项` : parsed ? `已选 ${listingSelection.length} 项` : "服务器下载空间"}</span>
         <button
           className="button secondary"
           disabled={busy === "create" || busy === "retry"}
@@ -381,6 +448,15 @@ export default function ParseModal({
           {step > 1 && <ArrowLeft size={15} />}
           {step === 1 ? "取消" : "上一步"}
         </button>
+        {step === 1 && parsed && (
+          <button
+            className="button primary"
+            disabled={!!busy || !listingSelection.length || listingSelection.length > 50}
+            onClick={() => void resolveEntries(parsed, listingSelection)}
+          >
+            解析所选项目 ({listingSelection.length})
+          </button>
+        )}
         {step === 2 && (
           <button
             className="button primary"

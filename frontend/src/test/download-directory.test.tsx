@@ -12,7 +12,7 @@ import App from "../App";
 import Settings from "../Settings";
 import TaskDetail from "../TaskDetail";
 import type { Settings as SettingsData } from "../types";
-import { parsed, respond, system, task } from "./fixtures";
+import { discovered, parsed, respond, system, task } from "./fixtures";
 
 const initial: SettingsData = {
   concurrency: 2,
@@ -238,7 +238,8 @@ describe("workspace directory propagation", () => {
         }
         if (url === "/api/bilibili/account")
           return respond({ logged_in: false, username: null, vip: false });
-        if (url === "/api/parse") return respond(parsed);
+        if (url === "/api/discover") return respond(discovered());
+        if (url === "/api/parse/discover-parse-1/resolve") return respond(parsed);
         throw new Error(`Unexpected request ${url}`);
       });
       vi.stubGlobal("fetch", fetch);
@@ -268,8 +269,10 @@ describe("workspace directory propagation", () => {
         screen.getByLabelText("视频、合集、番剧链接或 BV / AV 号"),
         "BVtest",
       );
-      await user.click(screen.getByRole("button", { name: "解析" }));
+      await user.click(screen.getByRole("button", { name: "读取列表" }));
       await screen.findByText("测试合集");
+      await user.click(screen.getByRole("button", { name: "全选" }));
+      await user.click(screen.getByRole("button", { name: /解析所选项目/ }));
       await user.click(screen.getByRole("button", { name: "确认规格" }));
       expect(
         within(screen.getByRole("dialog")).getByText("/export"),

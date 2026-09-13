@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import ParseModal, { PARSE_TIMEOUT_MS } from "../ParseModal";
-import { parsed, parseFeed, progress, respond, retryParsed, retryResult } from "./fixtures";
+import { discovered, parsed, parseFeed, progress, respond, retryParsed, retryResult } from "./fixtures";
 
 function mount() {
   const close = vi.fn();
@@ -9,7 +9,11 @@ function mount() {
   fireEvent.change(screen.getByLabelText("视频、合集、番剧链接或 BV / AV 号"), { target: { value: "BVtest" } });
   return { ...view, close };
 }
-const submit = () => fireEvent.click(screen.getByRole("button", { name: "解析" }));
+const submit = () => fireEvent.click(screen.getByRole("button", { name: "读取列表" }));
+async function selectAll() {
+  fireEvent.click(screen.getByRole("button", { name: "全选" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /解析所选项目/ })); });
+}
 async function send(feed: ReturnType<typeof parseFeed>, value: unknown) {
   await act(async () => { feed.send(value); });
 }
@@ -39,8 +43,9 @@ describe("real parse progress UI", () => {
     expect(bar).toHaveAttribute("aria-valuetext", "已处理 2 / 4");
     expect(screen.getByText("成功 1 · 失败 1")).toBeVisible();
     expect(screen.getByText(`当前：${progress.title}`)).toHaveAttribute("title", progress.title);
-    await send(feed, { event: "parsed", result: parsed });
-    expect(screen.getByRole("button", { name: "确认规格" })).toBeEnabled();
+    await send(feed, { event: "parsed", result: discovered() });
+    expect(screen.getByRole("button", { name: "解析所选项目 (0)" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "确认规格" })).not.toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -83,18 +88,19 @@ describe("real parse progress UI", () => {
     await act(async () => { resolve(old.response); });
     expect(screen.getByText("当前：新请求")).toBeVisible();
     expect(screen.queryByText("当前：陈旧标题")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "解析" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "读取列表" })).toBeDisabled();
     await send(next, { event: "parsed", result: { ...parsed, title: "新结果" } });
     expect(screen.getByText("新结果")).toBeVisible();
   });
   it("shows retry events in the existing picker pending area and preserves the picker, scroll and selection", async () => {
     const feed = parseFeed();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(retryParsed)).mockResolvedValueOnce(feed.response));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(discovered(retryParsed))).mockResolvedValueOnce(respond(retryParsed)).mockResolvedValueOnce(feed.response));
     mount();
     // Flush the initial step transition and its focus/scroll effect before
     // observing whether the subsequent retry changes the scroll position.
     await act(async () => { submit(); });
     await screen.findByText("测试合集");
+    await selectAll();
     const picker = screen.getByRole("region", { name: "下载项目" });
     const dialog = screen.getByRole("dialog");
     dialog.scrollTop = 120; dialog.scrollTo = vi.fn();
@@ -113,10 +119,11 @@ describe("real parse progress UI", () => {
   it("clears retry progress/timers on cancel and starts the next retry with fresh counts", async () => {
     vi.useFakeTimers();
     const old = parseFeed(), next = parseFeed();
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(retryParsed))
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(respond(discovered(retryParsed))).mockResolvedValueOnce(respond(retryParsed))
       .mockResolvedValueOnce(old.response).mockResolvedValueOnce(next.response));
     mount();
     await act(async () => { submit(); });
+    await selectAll();
     const retry = () => fireEvent.click(screen.getByRole("button", { name: /重新解析失败项/ }));
     retry();
     await send(old, { event: "progress", progress });
@@ -143,7 +150,7 @@ describe("real parse progress UI", () => {
     mount(); submit();
     await send(feed, { event: "error", message: "暂时无法解析", status: 503 });
     expect(screen.getByRole("alert")).toHaveTextContent("暂时无法解析");
-    expect(screen.getByRole("button", { name: "解析" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "读取列表" })).toBeEnabled();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 });

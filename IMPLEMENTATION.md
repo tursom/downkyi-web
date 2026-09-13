@@ -10,7 +10,9 @@ All paths below start /api. Session cookie authentication by default, same-origi
 - POST /logout -> {ok:true}
 - GET /tasks -> {tasks: Task[]} (excludes record_removed)
 - GET /library -> {tasks: Task[]} (completed outputs and removed unfinished records retained for cleanup; excludes removed records whose files were deleted)
-- POST /parse {url} -> ParseResult
+- POST /discover {url} -> ParseResult containing metadata-only entries with resolution:'pending', available:false, empty qualities/codecs and null error. Does not request per-video playback formats.
+- POST /parse/{parse_id}/resolve {entry_ids:string[]} -> new merged ParseResult; 1–50 unique cached pending/failed entries. Resolves only selected URLs, preserves unselected entries and stable identity/group, and marks resolved entries ready/failed. Pending entries cannot be admitted as tasks.
+- POST /parse {url} -> ParseResult (legacy full-resolution endpoint; the Web wizard uses discover then resolve)
 - POST /parse/{parse_id}/retry {entry_ids:string[]} -> full merged ParseResult with a new cache id. Only cached unavailable entries are accepted (1–100 unique IDs); the client cannot supply URLs. Successful and unselected entries stay unchanged, and recovered entries retain original id/url/group. Failed retries keep titles/durations/covers. Old snapshots remain immutable until normal expiry; 410 means reparse the original URL. Retry shares parse authentication, concurrency, cancellation, cookie snapshots and the 180-second timeout.
 - POST /tasks {parse_id,entry_ids:string[],quality:'best'|'2160'|'1440'|'1080'|'720'|'480'|'360',mode:'video'|'audio',codec:'auto'|'avc'|'hevc'|'av1',subtitles:bool,cover:bool} -> {tasks:Task[]}. Validate server-side cache, no client-supplied media URLs. Duplicate visible tasks rejected 409. Parsing can take up to 180 seconds; support abort/loading.
 - POST /tasks/{id}/pause -> Task
@@ -32,12 +34,17 @@ Task = {id:string,url,title,thumbnail,status:'queued'|'resolving'|'downloading'|
 Task download_dir is pinned on admission; files live at download_dir/id. Legacy tasks are backfilled once using their initial root. Changing settings never moves existing files or changes old task paths. /system reports disk information for the current default directory; if inaccessible it returns 503 while /settings remains usable.
 
 ParseResult = {id,title,thumbnail,entries:Entry[],truncated:bool,warnings:string[]}
-Entry = {id:string,title:string,url:string,duration:number|null,thumbnail:string,group:string,available:bool,error:string|null,qualities:number[],codecs:string[],has_subtitles:bool}
+Entry = {id:string,title:string,url:string,duration:number|null,thumbnail:string,group:string,available:bool,error:string|null,qualities:number[],codecs:string[],has_subtitles:bool,resolution?:'pending'|'ready'|'failed'}
 qualities are actual available stream heights, not presumed permissions. Codes are auto/avc/hevc/av1. No hard-coded account resolution limit. Empty video qualities can still represent audio-only source. Result ID expires in 1 hour. Maximum 100 entries per parse, 50 admitted per call. Optional extra fields in future are safe to ignore.
+
+The Web wizard first discovers metadata. A single entry is automatically resolved;
+multiple entries wait for explicit user selection with none selected initially.
+Successful resource metadata can be reused when returning to the list; unselected
+pending entries are not failures and are excluded from failure-retry batches.
 
 ## Parse Progress Streaming
 
-The two parse endpoints also accept `Accept: application/x-ndjson`. The default
+The discovery, resolution and retry endpoints accept `Accept: application/x-ndjson`. The default
 JSON response remains supported. Streaming responses contain one JSON object per
 line: progress events, optional heartbeats, then a terminal parsed result or error.
 

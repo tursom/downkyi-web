@@ -45,7 +45,7 @@ try {
       const originalFetch = window.fetch.bind(window);
       window.fetch = async (input, init) => {
         const path = new URL(typeof input === "string" ? input : input.url, location.href).pathname;
-        if (!/^\/api\/parse(?:\/[^/]+\/retry)?$/.test(path)) return originalFetch(input, init);
+        if (!/^\/api\/(?:discover|parse\/[^/]+\/(?:resolve|retry))$/.test(path)) return originalFetch(input, init);
         if (new Headers(init?.headers).get("Accept") !== "application/x-ndjson") throw new Error("Missing NDJSON Accept");
         const terminal = originalFetch(input, init).then((response) => response.json());
         void terminal.catch(() => {}); // Cancellation can happen before the test releases the terminal.
@@ -96,6 +96,8 @@ try {
     let retryCount = 0;
     let finishRetry;
     const retryBodies = [];
+    const resolveBodies = [];
+    let discoverCount = 0;
     const initialDownloadDir = "/downloads/long-directory-name-for-responsive-layout-check";
     let settings = {
       concurrency: 2,
@@ -151,6 +153,8 @@ try {
       codecs: ["avc", "hevc", "av1"],
       has_subtitles: index % 2 === 0,
     }));
+    const pendingEntries = entries.map((entry) => ({ ...entry, resolution: "pending", available: false, qualities: [], codecs: [], error: null }));
+    let cachedEntries = pendingEntries;
     await page.route("https://downkyi.test/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
       const json = (body) => route.fulfill({ json: body });
@@ -221,21 +225,25 @@ try {
           id: `parse-retry-${retryCount}`,
           title: "用于浏览器验证的分 P 合集",
           thumbnail: "/test-cover.png",
-          entries: entries.map((entry) => retryCount === 2 && !entry.available
-            ? { ...entry, available: true, error: null } : entry),
+          entries: cachedEntries = cachedEntries.map((entry) => retryCount === 2 && entry.resolution === "failed"
+            ? { ...entry, resolution: "ready", available: true, error: null } : entry),
           truncated: true,
           warnings: retryCount === 2 ? [] : ["部分资源不可用"],
         });
       }
-      if (path === "/api/parse")
-        return json({
-          id: "parse-test",
-          title: "用于浏览器验证的分 P 合集",
-          thumbnail: "/test-cover.png",
-          entries,
-          truncated: true,
-          warnings: ["部分资源不可用"],
-        });
+      if (path === "/api/discover") {
+        discoverCount += 1;
+        expect(route.request().postDataJSON()).toEqual({ url: "BVtest" });
+        return json({ id: "discover-test", title: "用于浏览器验证的分 P 合集", thumbnail: "/test-cover.png", entries: pendingEntries, truncated: true, warnings: [] });
+      }
+      if (path === "/api/parse/discover-test/resolve") {
+        const body = route.request().postDataJSON();
+        resolveBodies.push(body);
+        expect(body).toEqual({ entry_ids: ["part-0", "part-1", "part-2", "part-3", "part-5"] });
+        cachedEntries = entries.map((entry) => body.entry_ids.includes(entry.id)
+          ? { ...entry, resolution: entry.available ? "ready" : "failed" } : pendingEntries.find((pending) => pending.id === entry.id));
+        return json({ id: "parse-test", title: "用于浏览器验证的分 P 合集", thumbnail: "/test-cover.png", entries: cachedEntries, truncated: true, warnings: ["部分资源不可用"] });
+      }
       if (path.endsWith("/files")) {
         if (route.request().method() === "DELETE") return json({ ok: true });
         return json({
@@ -367,7 +375,7 @@ try {
       .click();
     await checkLayout("parse-input");
     await page.getByLabel("视频、合集、番剧链接或 BV / AV 号").fill("BVtest");
-    await page.getByRole("button", { name: "解析", exact: true }).click();
+    await page.getByRole("button", { name: "读取列表", exact: true }).click();
     await expect(page.getByText("正在识别链接")).toBeVisible();
     await expect(page.getByRole("progressbar", { name: "解析项目进度" })).not.toHaveAttribute("aria-valuenow");
     await expect(page.getByText("已处理 0 / 总数未知")).toBeVisible();
@@ -376,7 +384,7 @@ try {
     await page.getByRole("button", { name: "取消解析", exact: true }).click();
     await expect(page.getByRole("alert")).toContainText("解析已取消");
     await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveCount(0);
-    await page.getByRole("button", { name: "解析", exact: true }).click();
+    await page.getByRole("button", { name: "读取列表", exact: true }).click();
     await expect(page.getByText("正在识别链接")).toBeVisible();
     await page.evaluate(() => window.__oldParseFeed({ event: "progress", progress: {
       stage: "extracting", completed: 6, total: 6, succeeded: 6, failed: 0, title: "陈旧请求标题",
@@ -384,21 +392,40 @@ try {
     await expect(page.getByText("已处理 0 / 总数未知")).toBeVisible();
     await expect(page.getByText("当前：陈旧请求标题")).toHaveCount(0);
     await checkLayout("parse-progress-cancel-restart");
-    const progressBox = await page.locator(".parse-progress").boundingBox();
     await page.evaluate(() => window.__parseFeed({ event: "progress", progress: {
       stage: "listing", completed: 0, total: 6, succeeded: 0, failed: 0, title: "读取列表",
     } }));
     await expect(page.getByText("正在读取项目列表")).toBeVisible();
+    await checkLayout("discover-progress");
+    await page.evaluate(() => window.__finishParse());
+    const listing = page.getByRole("region", { name: "待解析项目" });
+    await expect(listing.getByRole("checkbox")).toHaveCount(6);
+    await expect(listing.locator('input:checked')).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "解析所选项目 (0)" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "解析所选项目 (0)" })).toBeInViewport();
+    await expect(listing.getByText("待解析", { exact: true })).toHaveCount(6);
+    await expect(listing.locator(".lucide-circle-alert")).toHaveCount(0);
+    expect(resolveBodies).toEqual([]);
+    expect(discoverCount).toBe(2);
+    await checkLayout("discover-list");
+    await listing.getByRole("button", { name: "全选", exact: true }).click();
+    await listing.getByRole("checkbox", { name: entries[4].title, exact: true }).uncheck();
+    await page.getByRole("button", { name: "解析所选项目 (5)" }).click();
+    await expect(page.getByText("正在解析所选项目的画质和资源")).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toBeInViewport();
+    await expect(page.getByRole("button", { name: "取消解析", exact: true })).toBeInViewport();
+    await expect(page.getByText("已处理 0 / 总数未知")).toBeVisible();
+    const progressBox = await page.locator(".parse-progress").boundingBox();
     await page.evaluate(() => {
       window.__parseFeed({ event: "heartbeat" });
       window.__parseFeed({ event: "progress", progress: {
-        stage: "extracting", completed: 3, total: 6, succeeded: 2, failed: 1,
+        stage: "extracting", completed: 3, total: 5, succeeded: 2, failed: 1,
         title: "当前中文标题 🎬 VeryLongUnbrokenProgressTitle".repeat(12),
       } });
     });
     await expect(page.getByText("正在提取资源")).toBeVisible();
     await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveAttribute("aria-valuenow", "3");
-    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveAttribute("aria-valuemax", "6");
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveAttribute("aria-valuemax", "5");
     await expect(page.getByText("成功 2 · 失败 1")).toBeVisible();
     const extractingBox = await page.locator(".parse-progress").boundingBox();
     expect(extractingBox.y).toBe(progressBox.y);
@@ -414,6 +441,8 @@ try {
       expect(specBox.y).toBe(pickerBox.y);
     } else expect(specBox.y).toBeGreaterThan(pickerBox.y);
     await checkLayout("parse-selection");
+    expect(resolveBodies).toHaveLength(1);
+    await expect(page.getByRole("checkbox", { name: new RegExp(entries[4].title) })).toHaveCount(0);
     await page.getByLabel("画质", { exact: true }).selectOption("1440");
     await page.getByLabel("视频编码").selectOption("av1");
     await page.getByLabel("下载字幕").check();
@@ -456,6 +485,13 @@ try {
     expect(retryBodies).toEqual([{ entry_ids: ["part-5"] }, { entry_ids: ["part-5"] }]);
     await page.locator(".picker-retry").scrollIntoViewIfNeeded();
     await checkLayout("parse-retry-recovered");
+    await page.getByRole("button", { name: "上一步" }).click();
+    await expect(listing.getByRole("checkbox", { name: entries[4].title, exact: true })).not.toBeChecked();
+    await checkLayout("discover-back");
+    await page.getByRole("button", { name: "解析所选项目 (5)" }).click();
+    await expect(page.getByLabel("画质", { exact: true })).toHaveValue("1440");
+    await expect(page.getByRole("checkbox", { name: new RegExp(`^${entries[5].title}`) })).not.toBeChecked();
+    expect(resolveBodies).toHaveLength(1);
     await page.getByRole("button", { name: "确认规格" }).click();
     await expect(page.getByText("准备添加 4 个下载任务")).toBeVisible();
     await checkLayout("parse-review");

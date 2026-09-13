@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ParseModal, { PARSE_TIMEOUT_MS } from "../ParseModal";
-import { respond, retryParsed, retryResult, task } from "./fixtures";
+import { discovered, respond, retryParsed, retryResult, task } from "./fixtures";
 
 function deferred() {
   let resolve!: (response: Response) => void;
@@ -12,6 +12,7 @@ function deferred() {
 }
 async function setup(source = retryParsed) {
   const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>()
+    .mockResolvedValueOnce(respond(discovered(source)))
     .mockResolvedValueOnce(respond(source));
   vi.stubGlobal("fetch", fetch);
   const onClose = vi.fn(), onCreated = vi.fn();
@@ -19,8 +20,14 @@ async function setup(source = retryParsed) {
   fireEvent.change(screen.getByLabelText("视频、合集、番剧链接或 BV / AV 号"), {
     target: { value: "BVtest" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "解析" }));
+  fireEvent.click(screen.getByRole("button", { name: "读取列表" }));
   await screen.findByText("测试合集");
+  fireEvent.click(screen.getByRole("button", { name: "全选" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: /解析所选项目/ })); });
+  expect(fetch.mock.calls[0][0]).toBe("/api/discover");
+  expect(fetch.mock.calls[1][0]).toBe(`/api/parse/discover-${source.id}/resolve`);
+  // Existing retry assertions count from the initial resolve request.
+  fetch.mock.calls.shift();
   return { ...view, fetch, onClose, onCreated, user: userEvent.setup() };
 }
 const batch = () => screen.getByRole("button", { name: /重新解析失败项/ });
@@ -217,26 +224,29 @@ describe("retry failed parse entries", () => {
     await user.click(single());
     await user.click(screen.getByRole("button", { name: "取消重试" }));
     await user.click(screen.getByRole("button", { name: "更换链接" }));
-    fetch.mockResolvedValueOnce(respond({ ...retryParsed, id: "new-source", title: "新合集" }));
-    await user.click(screen.getByRole("button", { name: "解析" }));
+    fetch.mockResolvedValueOnce(respond(discovered({ ...retryParsed, id: "new-source", title: "新合集" })))
+      .mockResolvedValueOnce(respond({ ...retryParsed, id: "new-source", title: "新合集" }));
+    await user.click(screen.getByRole("button", { name: "读取列表" }));
     await screen.findByText("新合集");
+    await user.click(screen.getByRole("button", { name: "全选" }));
+    await user.click(screen.getByRole("button", { name: /解析所选项目/ }));
     await act(async () => { old.resolve(respond(retryResult("stale", ["p3"]))); });
     expect(screen.getByText("新合集")).toBeVisible();
     fetch.mockResolvedValueOnce(respond(retryResult("fresh", [])));
     await user.click(single());
-    expect(fetch.mock.calls[3][0]).toBe("/api/parse/new-source/retry");
+    expect(fetch.mock.calls[4][0]).toBe("/api/parse/new-source/retry");
   });
 
-  it("caps a batch at 100 currently unavailable IDs, including failures hidden by search", async () => {
+  it("retries only failures in the selected scope, including failures hidden by search", async () => {
     const source = {
       ...retryParsed,
       entries: [...retryParsed.entries.filter((entry) => entry.available),
-        ...Array.from({ length: 101 }, (_, index) => ({ ...retryParsed.entries[2], id: `failed-${index}` }))],
+        ...Array.from({ length: 47 }, (_, index) => ({ ...retryParsed.entries[2], id: `failed-${index}` }))],
     };
     const { fetch, user } = await setup(source);
     await user.type(screen.getByLabelText("搜索分 P 或剧集"), "第一集");
     fetch.mockReturnValueOnce(deferred().promise);
     await user.click(batch());
-    expect(body(fetch, 1)).toEqual({ entry_ids: Array.from({ length: 100 }, (_, index) => `failed-${index}`) });
+    expect(body(fetch, 1)).toEqual({ entry_ids: Array.from({ length: 47 }, (_, index) => `failed-${index}`) });
   });
 });

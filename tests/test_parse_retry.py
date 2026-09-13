@@ -100,7 +100,7 @@ def test_still_failed_entry_keeps_metadata_and_can_be_retried_again(setup):
     client, source, _, parsed = setup
     source.fail_urls.add(BASE + '?p=2')
     result = retry(client, parsed, ['failed']).json()
-    assert result['entries'][1] == parsed['entries'][1]
+    assert result['entries'][1] == {**parsed['entries'][1], 'resolution': 'failed'}
     source.fail_urls.clear()
     recovered = retry(client, result, ['failed']).json()
     assert recovered['entries'][1]['available']

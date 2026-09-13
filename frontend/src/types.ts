@@ -46,6 +46,14 @@ export interface ParsedEntry {
   codecs: string[];
   has_subtitles: boolean;
 }
+export interface ParseProgress {
+  stage: "resolving" | "listing" | "extracting";
+  completed: number;
+  total: number | null;
+  succeeded: number;
+  failed: number;
+  title: string;
+}
 export interface ParseResult {
   id: string;
   title: string;

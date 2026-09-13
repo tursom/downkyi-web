@@ -71,6 +71,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
     auth_required = config.auth_mode != "none"
     parse_gate = asyncio.Semaphore(2)
     parse_jobs = set()
+    parse_cleanups = set()
 
     @asynccontextmanager
     async def lifespan(app):
@@ -99,6 +100,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
             for job in list(parse_jobs):
                 job.cancel()
             await asyncio.gather(*list(parse_jobs), return_exceptions=True)
+            await asyncio.gather(*(cleanup() for cleanup in list(parse_cleanups)), return_exceptions=True)
             await app.state.manager.close()
             await app.state.account.close()
             app.state.store.close()
@@ -169,52 +171,104 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
     async def library():
         return {"tasks": [public_task(t) for t in app.state.store.all_tasks() if (t["status"] == "completed" or t["record_removed"]) and not (t["record_removed"] and t["files_deleted"])]}
 
+    def parse_error(error):
+        from .media import TIMEOUT_ERROR, sanitize_error
+        if isinstance(error, ServiceError):
+            return error
+        if isinstance(error, TimeoutError):
+            return ServiceError(504, "解析超时，请减少合集范围或稍后重试")
+        if isinstance(error, ValueError):
+            return ServiceError(422, sanitize_error(error))
+        if isinstance(error, RuntimeError):
+            message = sanitize_error(error)
+            return ServiceError(504 if message == TIMEOUT_ERROR else 502, message)
+        logger.error("Parse failed (%s)", type(error).__name__)
+        return ServiceError(500, "服务暂时无法完成操作，请检查服务日志与磁盘状态")
+
+    async def invoke(method, value, cookie, on_progress):
+        # Legacy adapters need no callback for ordinary JSON requests. Streaming
+        # adapters without the optional hook still provide a terminal result.
+        if on_progress is not None:
+            import inspect
+            parameters = inspect.signature(method).parameters
+            if "on_progress" in parameters or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+                return await method(value, cookie, on_progress=on_progress)
+        return await method(value, cookie)
+
     async def run_parse(request: Request, operation):
+        from .media import PARSE_TIMEOUT, validate_parse_progress
+        from .parse_stream import ParseResponse, wants_progress
         if parse_gate.locked():
             raise ServiceError(429, "已有解析任务进行中，请稍后重试")
-        async with parse_gate:
-            runtime = config.data_dir / "runtime" / f"parse-{uuid.uuid4().hex}"
-            runtime.mkdir(mode=0o700)
-            job = None
+        await parse_gate.acquire()
+        runtime = config.data_dir / "runtime" / f"parse-{uuid.uuid4().hex}"
+        job = None
+        cleaned = False
+
+        async def cleanup():
+            nonlocal cleaned
+            if cleaned:
+                return
+            cleaned = True
             try:
-                cookie = app.state.account.snapshot(runtime / "cookies.txt")
-                job = asyncio.create_task(operation(cookie))
-                parse_jobs.add(job)
-                async with asyncio.timeout(180):
-                    while not job.done():
-                        await asyncio.wait({job}, timeout=0.25)
-                        if await request.is_disconnected():
-                            raise ServiceError(499, "客户端已断开解析请求")
-                    result = await job
-                if not isinstance(result, dict) or not result.get("entries"):
-                    raise ServiceError(422, "未找到可下载的内容")
-                parse_id = uuid.uuid4().hex
-                app.state.store.save_parse(parse_id, result)
-                return {**result, "id": parse_id}
-            except asyncio.TimeoutError:
-                raise ServiceError(504, "解析超时，请减少合集范围或稍后重试") from None
-            except ValueError as error:
-                # Media adapters expose curated public errors, never raw upstream text.
-                message = str(error)
-                if re.search(r"https?://|cookie|sessdata|token|/root/", message, re.I):
-                    message = "链接无效或不支持，请使用哔哩哔哩视频、合集或番剧链接"
-                raise ServiceError(422, message[:500]) from None
-            except RuntimeError as error:
-                message = str(error)
-                if re.search(r"https?://|cookie|sessdata|token|/root/", message, re.I):
-                    message = "解析失败，请检查网络、登录状态或稍后重试"
-                raise ServiceError(502, message[:500]) from None
-            finally:
                 if job:
                     if not job.done():
                         job.cancel()
                     await asyncio.gather(job, return_exceptions=True)
                     parse_jobs.discard(job)
+            finally:
                 shutil.rmtree(runtime, ignore_errors=True)
+                parse_gate.release()
+                parse_cleanups.discard(cleanup)
+
+        parse_cleanups.add(cleanup)
+        streaming = wants_progress(request)
+        queue = asyncio.Queue(maxsize=32)
+
+        async def progress(value):
+            await queue.put(validate_parse_progress(value).copy())
+
+        async def execute(cookie):
+            async with asyncio.timeout(PARSE_TIMEOUT):
+                result = await operation(cookie, progress if streaming else None)
+            if not isinstance(result, dict) or not result.get("entries"):
+                raise ServiceError(422, "未找到可下载的内容")
+            parse_id = uuid.uuid4().hex
+            app.state.store.save_parse(parse_id, result)
+            return {**result, "id": parse_id}
+
+        try:
+            runtime.mkdir(mode=0o700)
+            cookie = app.state.account.snapshot(runtime / "cookies.txt")
+            job = asyncio.create_task(execute(cookie))
+            parse_jobs.add(job)
+            if streaming:
+                return ParseResponse(job, queue, cleanup, parse_error)
+            try:
+                while not job.done():
+                    await asyncio.wait({job}, timeout=0.25)
+                    if await request.is_disconnected():
+                        raise ServiceError(499, "客户端已断开解析请求")
+                return await job
+            finally:
+                await cleanup()
+        except BaseException as error:
+            await cleanup()
+            if isinstance(error, Exception):
+                raise parse_error(error) from None
+            raise
 
     @api.post("/parse")
     async def parse(body: ParseInput, request: Request):
-        return await run_parse(request, lambda cookie: app.state.media.parse(body.url, cookie))
+        from .media import MediaService, canonical_url
+        from .parse_stream import wants_progress
+        # Perform syntax validation before sending HTTP 200. Non-streaming test
+        # adapters retain their historical input contract.
+        if wants_progress(request) or isinstance(app.state.media, MediaService):
+            canonical_url(body.url)
+        return await run_parse(request, lambda cookie, progress:
+                               invoke(app.state.media.parse, body.url, cookie, progress))
 
     @api.post("/parse/{parse_id}/retry")
     async def retry_parse(parse_id: str, body: RetryParseInput, request: Request):
@@ -230,9 +284,9 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
             raise ServiceError(422, "仅可重新解析失败的项目")
         urls = [entries[key]["url"] for key in body.entry_ids]
 
-        async def retry(cookie):
+        async def retry(cookie, progress):
             from .media import PARTIAL_WARNING
-            refreshed = await app.state.media.retry(urls, cookie)
+            refreshed = await invoke(app.state.media.retry, urls, cookie, progress)
             updates = refreshed.get("entries", [])
             if len(updates) != len(urls) or {entry.get("url") for entry in updates} != set(urls):
                 raise RuntimeError("重新解析结果不完整，请重试")

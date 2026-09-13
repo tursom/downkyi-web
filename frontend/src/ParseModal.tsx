@@ -8,12 +8,13 @@ import {
   Plus,
   Search,
 } from "lucide-react";
-import { api, ApiError, errorMessage, isAbort } from "./api";
+import { api, parseStream, ApiError, errorMessage, isAbort } from "./api";
+import ParseProgressView from "./ParseProgressView";
 import { ErrorNotice, Modal, Spinner, Thumbnail } from "./components";
 import EntryPicker, { eligible } from "./EntryPicker";
 import DownloadSpecs, { availableSpecs } from "./DownloadSpecs";
 import DownloadReview from "./DownloadReview";
-import type { DownloadOptions, ParseResult, Task } from "./types";
+import type { DownloadOptions, ParseProgress, ParseResult, Task } from "./types";
 export const PARSE_TIMEOUT_MS = 180_000;
 const steps = ["解析内容", "选择项目与规格", "确认入队"];
 export default function ParseModal({
@@ -37,6 +38,8 @@ export default function ParseModal({
     subtitles: false,
   });
   const [busy, setBusy] = useState<"parse" | "retry" | "create" | null>(null);
+  const [progress, setProgress] = useState<ParseProgress>();
+  const [startedAt, setStartedAt] = useState(0);
   const [retryMessage, setRetryMessage] = useState("");
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
@@ -79,7 +82,15 @@ export default function ParseModal({
   }
   function close() {
     abortRequest();
+    setBusy(null);
     onClose();
+  }
+  function beginProgress(request: AbortController) {
+    setProgress(undefined);
+    setStartedAt(Date.now());
+    return (next: ParseProgress) => {
+      if (!request.signal.aborted && controller.current === request) setProgress(next);
+    };
   }
   async function parse(event: FormEvent) {
     event.preventDefault();
@@ -96,11 +107,11 @@ export default function ParseModal({
       setError("解析超时（180 秒），请重试或缩小内容范围。");
     }, PARSE_TIMEOUT_MS);
     try {
-      const result = await api<ParseResult>("/parse", {
+      const result = await parseStream("/parse", {
         method: "POST",
         body: { url: url.trim() },
         signal: request.signal,
-      });
+      }, beginProgress(request));
       if (request.signal.aborted || controller.current !== request) return;
       const mode = result.entries.some((entry) => eligible(entry, "video"))
         ? "video"
@@ -120,7 +131,7 @@ export default function ParseModal({
       );
       setStep(2);
     } catch (cause) {
-      if (!request.signal.aborted && !isAbort(cause))
+      if (!request.signal.aborted && controller.current === request && !isAbort(cause))
         setError(errorMessage(cause));
     } finally {
       if (controller.current === request) {
@@ -149,9 +160,10 @@ export default function ParseModal({
       setError("重试超时（180 秒），原列表和选择已保留，请再次尝试。");
     }, PARSE_TIMEOUT_MS);
     try {
-      const result = await api<ParseResult>(
+      const result = await parseStream(
         `/parse/${encodeURIComponent(parsed.id)}/retry`,
         { method: "POST", body: { entry_ids: ids }, signal: request.signal },
+        beginProgress(request),
       );
       if (request.signal.aborted || controller.current !== request) return;
       const recovered = result.entries.filter(
@@ -265,8 +277,7 @@ export default function ParseModal({
           <div className="source-placeholder">
             {busy === "parse" ? (
               <>
-                <Spinner label="正在解析内容…" />
-                <span>读取视频信息与可用资源，最长 180 秒</span>
+                <ParseProgressView progress={progress} startedAt={startedAt} />
                 <button className="button secondary" onClick={cancelParse}>
                   取消解析
                 </button>
@@ -326,6 +337,7 @@ export default function ParseModal({
                   mode={options.mode}
                   retry={(ids) => void retry(ids)}
                   retrying={busy === "retry"}
+                  retryProgress={busy === "retry" ? <ParseProgressView progress={progress} startedAt={startedAt} /> : undefined}
                   retryMessage={retryMessage}
                   cancelRetry={cancelParse}
                 />

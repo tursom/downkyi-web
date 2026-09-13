@@ -1,8 +1,9 @@
 """Isolated Bilibili extraction and download workers (Python 3.11+).
 
 The parent owns authentication, cookie snapshots, cache IDs and unique task dirs.
-Parse subprocess protocol: {event: "parsed", result: {...}} or {event: "error",
-message: ...}. Download protocol is documented in IMPLEMENTATION.md.
+Parse subprocess protocol: NDJSON progress records followed by exactly one
+{event: "parsed", result: {...}} or {event: "error", message: ...} record.
+Download protocol is documented in IMPLEMENTATION.md.
 Quality is a height ceiling, codec is a strict stream filter (not transcoding).
 Interactive branches and legacy multi-video fragments are unavailable because
 URL-only jobs cannot independently identify them. All networking is restricted
@@ -30,7 +31,8 @@ import urllib.request
 
 MAX_ENTRIES = 100
 PARSE_TIMEOUT = 180
-MAX_PROTOCOL_BYTES = 1024 * 1024
+MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
+MAX_PROTOCOL_BYTES = 4 * MAX_PROTOCOL_LINE_BYTES
 MAX_INPUT_BYTES = 16 * 1024
 UNSUPPORTED = "不支持此链接，请输入 Bilibili BV/av 视频、番剧 ep/ss 或受支持的合集链接。"
 NETWORK_ERROR = "连接 Bilibili 失败，请检查网络后重试。"
@@ -415,14 +417,34 @@ def _entry(info: dict, url: str, group: str, error=None) -> dict:
     }
 
 
-def parse_media(url: str, cookie_path=None, *, expand_collection=True) -> dict:
+def parse_media(url: str, cookie_path=None, *, expand_collection=True, on_progress=None) -> dict:
+    """Walk entries with an optional synchronous progress callback.
+
+    Playlist cardinality is unknown until traversal ends: lazy pages, nested
+    playlists and duplicate URLs make upstream playlist counts unreliable.
+    """
+    url = canonical_url(url)
+    entries, seen = [], set()
+    truncated = False
+
+    def report(stage, title="", *, final=False):
+        if on_progress:
+            succeeded = sum(bool(entry["available"]) for entry in entries)
+            on_progress({"stage": stage, "completed": len(entries),
+                         "total": len(entries) if final and not truncated else None,
+                         "succeeded": succeeded, "failed": len(entries) - succeeded,
+                         "title": _text(title)})
+
+    def append(entry):
+        entries.append(entry)
+        report("extracting", entry["title"])
+
+    report("resolving")
     url = _resolve_url(url)
     logger = _Logger()
     options = _base_options(cookie_path, logger)
     options.update({"writesubtitles": True, "listsubtitles": True, "lazy_playlist": True,
                     "downkyi_expand_collection": expand_collection, "sleep_interval_requests": 0.25})
-    entries, seen = [], set()
-    truncated = False
     visited = 0
     with _make_ydl(options) as ydl:
         root = ydl.extract_info(url, download=False, process=False)
@@ -449,13 +471,14 @@ def parse_media(url: str, cookie_path=None, *, expand_collection=True) -> dict:
                 if target in ancestors:
                     logger.warning(UNSUPPORTED)
                     return
+                report("extracting", info.get("title"))
                 try:
                     full = ydl.extract_info(target, download=False, process=False)
                     if full is None:
                         raise RuntimeError(NO_FORMATS)
                 except Exception as exc:
                     if target not in seen:
-                        entries.append(_entry(info, target, group, exc))
+                        append(_entry(info, target, group, exc))
                         seen.add(target)
                     return
                 walk(full, target, group, (*ancestors, target), depth + 1)
@@ -463,9 +486,10 @@ def parse_media(url: str, cookie_path=None, *, expand_collection=True) -> dict:
             if kind in ("playlist", "multi_video"):
                 if kind == "multi_video":
                     # Legacy FLV fragments cannot be selected by the URL-only job contract.
-                    entries.append(_entry(info, source, group, UNSUPPORTED))
+                    append(_entry(info, source, group, UNSUPPORTED))
                     return
                 child_group = _text(info.get("title")) or group
+                report("listing", child_group)
                 try:
                     for child in info.get("entries") or []:
                         if len(entries) >= MAX_ENTRIES or visited >= MAX_ENTRIES * 10:
@@ -489,9 +513,10 @@ def parse_media(url: str, cookie_path=None, *, expand_collection=True) -> dict:
             seen.add(target)
             # Inline interactive branches have no independently addressable page URL.
             interactive = bool(info.get("id") and "_" in str(info["id"]) and not re.fullmatch(rf"{BV}_p[0-9]+", str(info["id"])))
-            entries.append(_entry(info, target, group, UNSUPPORTED if interactive else None))
+            append(_entry(info, target, group, UNSUPPORTED if interactive else None))
 
         walk(root, url)
+    report("extracting", root.get("title"), final=True)
     if not entries:
         raise RuntimeError(NO_FORMATS)
     warnings = list(logger.warnings)
@@ -504,13 +529,23 @@ def parse_media(url: str, cookie_path=None, *, expand_collection=True) -> dict:
             "entries": entries, "truncated": truncated, "warnings": warnings}
 
 
-def retry_media(urls: list[str], cookie_path=None) -> dict:
+def retry_media(urls: list[str], cookie_path=None, *, on_progress=None) -> dict:
+    """Retry selected URLs; on_progress is synchronous and counts URLs, not walks."""
     if not isinstance(urls, list) or not 1 <= len(urls) <= MAX_ENTRIES:
         raise ValueError(UNSUPPORTED)
     targets = [canonical_url(url, allow_short=False) for url in urls]
     if len(set(targets)) != len(targets):
         raise ValueError(UNSUPPORTED)
     entries, warnings = [], []
+
+    def report(title=""):
+        if on_progress:
+            succeeded = sum(bool(entry["available"]) for entry in entries)
+            on_progress({"stage": "extracting", "completed": len(entries),
+                         "total": len(targets), "succeeded": succeeded,
+                         "failed": len(entries) - succeeded, "title": _text(title)})
+
+    report()
     for target in targets:
         try:
             result = parse_media(target, cookie_path, expand_collection=False)
@@ -523,6 +558,7 @@ def retry_media(urls: list[str], cookie_path=None) -> dict:
                     warnings.append(warning)
         except Exception as error:
             entries.append(_entry({}, target, "", error))
+        report(entries[-1].get("title"))
     return {"entries": entries, "warnings": warnings}
 
 
@@ -540,18 +576,80 @@ async def _stop_process(process):
         await process.wait()
 
 
+def validate_parse_progress(value):
+    if (not isinstance(value, dict) or set(value) != {
+            "stage", "completed", "total", "succeeded", "failed", "title"}
+            or value["stage"] not in ("resolving", "listing", "extracting")
+            or not isinstance(value["title"], str) or len(value["title"]) > 500):
+        raise RuntimeError(GENERIC_ERROR)
+    for key in ("completed", "succeeded", "failed"):
+        if type(value[key]) is not int or not 0 <= value[key] <= MAX_ENTRIES:
+            raise RuntimeError(GENERIC_ERROR)
+    total = value["total"]
+    if (value["completed"] != value["succeeded"] + value["failed"]
+            or (total is not None and (type(total) is not int
+                or not value["completed"] <= total <= MAX_ENTRIES))):
+        raise RuntimeError(GENERIC_ERROR)
+    return value
+
+
+class _ParseProtocol:
+    def __init__(self, on_progress):
+        self.on_progress = on_progress
+        self.terminal = None
+        self.previous = None
+
+    async def line(self, line):
+        if self.terminal is not None or not line or len(line) > MAX_PROTOCOL_LINE_BYTES:
+            raise RuntimeError(GENERIC_ERROR)
+        event = json.loads(line)
+        if not isinstance(event, dict):
+            raise RuntimeError(GENERIC_ERROR)
+        kind = event.get("event")
+        if kind == "progress":
+            progress = validate_parse_progress(event.get("progress"))
+            if self.previous and (any(progress[key] < self.previous[key]
+                    for key in ("completed", "succeeded", "failed"))
+                    or (self.previous["total"] is not None
+                        and progress["total"] != self.previous["total"])):
+                raise RuntimeError(GENERIC_ERROR)
+            self.previous = progress.copy()
+            if self.on_progress:
+                await self.on_progress(progress)
+        elif kind == "parsed":
+            result = event.get("result")
+            if (not isinstance(result, dict) or not isinstance(result.get("entries"), list)
+                    or len(result["entries"]) > MAX_ENTRIES):
+                raise RuntimeError(GENERIC_ERROR)
+            if self.previous:
+                entries = result["entries"]
+                succeeded = sum(bool(entry["available"]) for entry in entries)
+                if (self.previous["completed"] != len(entries)
+                        or (self.previous["total"] != len(entries)
+                            and not (result.get("truncated") is True and self.previous["total"] is None))
+                        or self.previous["succeeded"] != succeeded):
+                    raise RuntimeError(GENERIC_ERROR)
+            self.terminal = event
+        elif kind == "error" and isinstance(event.get("message"), str):
+            self.terminal = event
+        else:
+            raise RuntimeError(GENERIC_ERROR)
+
+
 class MediaService:
     def __init__(self, config):
         self.config = config
 
-    async def parse(self, url: str, cookie_path: Path | None = None) -> dict:
-        return await self._extract("parse", {"url": canonical_url(url)}, cookie_path)
+    async def parse(self, url: str, cookie_path: Path | None = None, *, on_progress=None) -> dict:
+        """on_progress, when supplied, is awaited with each progress dictionary."""
+        return await self._extract("parse", {"url": canonical_url(url)}, cookie_path, on_progress)
 
-    async def retry(self, urls: list[str], cookie_path: Path | None = None) -> dict:
-        return await self._extract("retry", {"urls": urls}, cookie_path)
+    async def retry(self, urls: list[str], cookie_path: Path | None = None, *, on_progress=None) -> dict:
+        """on_progress follows the same asynchronous contract as parse."""
+        return await self._extract("retry", {"urls": urls}, cookie_path, on_progress)
 
-    async def _extract(self, operation: str, payload: dict, cookie_path: Path | None) -> dict:
-        payload = json.dumps({**payload, "cookie_path": str(cookie_path) if cookie_path else None}).encode()
+    async def _extract(self, operation: str, payload: dict, cookie_path: Path | None, on_progress=None) -> dict:
+        payload = json.dumps({**payload, "progress": True, "cookie_path": str(cookie_path) if cookie_path else None}).encode()
         if len(payload) > MAX_INPUT_BYTES:
             raise ValueError(UNSUPPORTED)
         process = await asyncio.create_subprocess_exec(
@@ -565,36 +663,49 @@ class MediaService:
                 process.stdin.write(payload)
                 await process.stdin.drain()
                 process.stdin.close()
-                data = bytearray()
+                protocol = _ParseProtocol(on_progress)
+                pending = bytearray()
+                size = 0
                 while chunk := await process.stdout.read(65536):
-                    data.extend(chunk)
-                    if len(data) > MAX_PROTOCOL_BYTES:
+                    size += len(chunk)
+                    if size > MAX_PROTOCOL_BYTES:
                         raise RuntimeError(GENERIC_ERROR)
+                    pending.extend(chunk)
+                    while b"\n" in pending:
+                        line, _, rest = pending.partition(b"\n")
+                        pending = bytearray(rest)
+                        await protocol.line(line)
+                    if len(pending) > MAX_PROTOCOL_LINE_BYTES:
+                        raise RuntimeError(GENERIC_ERROR)
+                if pending:
+                    await protocol.line(pending)  # Legacy single-JSON workers need no newline.
                 code = await process.wait()
-                try:
-                    event = json.loads(data)
-                except (ValueError, UnicodeError):
-                    raise RuntimeError(GENERIC_ERROR) from None
-                if not isinstance(event, dict):
-                    raise RuntimeError(GENERIC_ERROR)
-                if code or event.get("event") != "parsed":
-                    raise RuntimeError(sanitize_error(event.get("message", "")))
-                result = event.get("result")
-                if (not isinstance(result, dict) or not isinstance(result.get("entries"), list)
-                        or len(result["entries"]) > MAX_ENTRIES):
-                    raise RuntimeError(GENERIC_ERROR)
-                return result
+                event = protocol.terminal
+                if not event or code or event["event"] != "parsed":
+                    raise RuntimeError(sanitize_error((event or {}).get("message", "")))
+                return event["result"]
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             raise RuntimeError(sanitize_error(exc)) from None
         finally:
-            await asyncio.shield(_stop_process(process))
+            # A deadline followed by a disconnect can cancel us more than once.
+            # Keep ownership of the reaper until the whole process group is gone.
+            reaper = asyncio.create_task(_stop_process(process))
+            cancelled = False
+            while not reaper.done():
+                try:
+                    await asyncio.shield(reaper)
+                except asyncio.CancelledError:
+                    cancelled = True
+            await reaper
+            if cancelled:
+                raise asyncio.CancelledError
 
 
 def _emit(event: dict):
     line = json.dumps(event, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-    if len(line.encode()) > MAX_PROTOCOL_BYTES:
+    if len(line.encode()) > MAX_PROTOCOL_LINE_BYTES:
         raise RuntimeError(GENERIC_ERROR)
     print(line, flush=True)
 
@@ -806,10 +917,12 @@ def main(argv=None) -> int:
                 signal.alarm(PARSE_TIMEOUT)
                 try:
                     with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                        progress_options = ({"on_progress": lambda value: emit({"event": "progress", "progress": value})}
+                                            if payload.get("progress") is True else {})
                         if args[0] == "retry":
-                            result = retry_media(payload.get("urls"), payload.get("cookie_path"))
+                            result = retry_media(payload.get("urls"), payload.get("cookie_path"), **progress_options)
                         else:
-                            result = parse_media(payload.get("url", ""), payload.get("cookie_path"))
+                            result = parse_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
                     emit({"event": "parsed", "result": result})
                 finally:
                     signal.alarm(0)

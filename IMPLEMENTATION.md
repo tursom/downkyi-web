@@ -35,6 +35,28 @@ ParseResult = {id,title,thumbnail,entries:Entry[],truncated:bool,warnings:string
 Entry = {id:string,title:string,url:string,duration:number|null,thumbnail:string,group:string,available:bool,error:string|null,qualities:number[],codecs:string[],has_subtitles:bool}
 qualities are actual available stream heights, not presumed permissions. Codes are auto/avc/hevc/av1. No hard-coded account resolution limit. Empty video qualities can still represent audio-only source. Result ID expires in 1 hour. Maximum 100 entries per parse, 50 admitted per call. Optional extra fields in future are safe to ignore.
 
+## Parse Progress Streaming
+
+The two parse endpoints also accept `Accept: application/x-ndjson`. The default
+JSON response remains supported. Streaming responses contain one JSON object per
+line: progress events, optional heartbeats, then a terminal parsed result or error.
+
+```json
+{"event":"progress","progress":{"stage":"extracting","completed":12,"total":58,"succeeded":10,"failed":2,"title":"当前条目标题"}}
+{"event":"heartbeat"}
+{"event":"parsed","result":{"id":"new-cache-id","title":"合集标题","entries":[],"warnings":[],"truncated":false,"thumbnail":""}}
+```
+
+The result example illustrates the envelope only; successful API results contain
+actual entries. Stages are `resolving`, `listing`, and `extracting`. Unknown totals
+are `null`; the UI must not fabricate a percentage. Counts reflect completed
+extractions, not elapsed time. Retry totals refer only to the selected failed
+entries. Errors before streaming use the normal HTTP error response; errors after
+headers use `{event:"error",message:string,status:number}`. Clients must handle
+UTF-8 and lines split across network chunks and require a terminal event. Abort
+and disconnect retain the existing worker termination and snapshot cleanup rules.
+Reverse proxies must disable response buffering (as in `deploy/nginx.conf`).
+
 ## Media Worker Contract
 
 backend/media.py implements MediaService and CLI for isolated yt-dlp work. Constructor MediaService(config), config has data_dir,download_dir. Public async parse(url:str,cookie_path:Path|None) -> dict {title,thumbnail,entries,truncated,warnings} (without cache id). Parent manages snapshots so method must not expose cookies. Expose normalize_url(url) async if convenient.

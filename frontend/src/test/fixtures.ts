@@ -1,4 +1,4 @@
-import type { ParseResult, Task } from "../types";
+import type { ParseProgress, ParseResult, Task } from "../types";
 export const task: Task = {
   id: "task-1",
   url: "https://www.bilibili.com/video/BVtest",
@@ -118,6 +118,25 @@ export const system = {
   download_dir: "/downloads",
   active_tasks: 0,
 };
+export const progress: ParseProgress = {
+  stage: "extracting", completed: 2, total: 4, succeeded: 1, failed: 1, title: "当前中文标题 🎬",
+};
+// Controlled byte stream: tests deliver actual events; clocks never invent progress.
+export function parseFeed() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let cancelled = false;
+  const response = new Response(new ReadableStream<Uint8Array>({
+    start(value) { controller = value; },
+    cancel() { cancelled = true; },
+  }), { headers: { "Content-Type": "application/x-ndjson; charset=utf-8" } });
+  return {
+    response,
+    get cancelled() { return cancelled; },
+    bytes(value: Uint8Array) { if (!cancelled) controller.enqueue(value); },
+    send(value: unknown) { if (!cancelled) controller.enqueue(new TextEncoder().encode(`${JSON.stringify(value)}\n`)); },
+    end() { if (!cancelled) controller.close(); },
+  };
+}
 export function respond(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), { status });
 }

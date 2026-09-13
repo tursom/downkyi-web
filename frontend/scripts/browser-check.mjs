@@ -39,6 +39,39 @@ try {
   ]) {
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
+    // Playwright route.fulfill buffers bodies. Wrap fixture JSON in a controlled browser
+    // ReadableStream so the production reader sees separate real UTF-8/NDJSON chunks.
+    await page.addInitScript(() => {
+      const originalFetch = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const path = new URL(typeof input === "string" ? input : input.url, location.href).pathname;
+        if (!/^\/api\/parse(?:\/[^/]+\/retry)?$/.test(path)) return originalFetch(input, init);
+        if (new Headers(init?.headers).get("Accept") !== "application/x-ndjson") throw new Error("Missing NDJSON Accept");
+        const terminal = originalFetch(input, init).then((response) => response.json());
+        void terminal.catch(() => {}); // Cancellation can happen before the test releases the terminal.
+        let controller, cancelled = false;
+        const stream = new ReadableStream({
+          start(value) { controller = value; },
+          cancel() { cancelled = true; },
+        });
+        const send = (value) => {
+          if (cancelled) return;
+          const bytes = new TextEncoder().encode(`${JSON.stringify(value)}\n`);
+          // Deliberately split every UTF-8 character and line across reads.
+          for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+        };
+        window.__parseFeed = send;
+        const finish = async () => {
+          const result = await terminal;
+          send({ event: "parsed", result });
+          if (!cancelled) controller.close();
+        };
+        window.__finishParse = finish;
+        send({ event: "progress", progress: { stage: "resolving", completed: 0, total: null, succeeded: 0, failed: 0, title: "" } });
+        if (path.endsWith("/retry")) void finish().catch(() => {});
+        return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+      };
+    });
     const fixtureImage = await page.evaluate(() => {
       const canvas = document.createElement("canvas");
       canvas.width = 320;
@@ -335,6 +368,43 @@ try {
     await checkLayout("parse-input");
     await page.getByLabel("视频、合集、番剧链接或 BV / AV 号").fill("BVtest");
     await page.getByRole("button", { name: "解析", exact: true }).click();
+    await expect(page.getByText("正在识别链接")).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).not.toHaveAttribute("aria-valuenow");
+    await expect(page.getByText("已处理 0 / 总数未知")).toBeVisible();
+    await checkLayout("parse-progress-unknown");
+    await page.evaluate(() => { window.__oldParseFeed = window.__parseFeed; });
+    await page.getByRole("button", { name: "取消解析", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("解析已取消");
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveCount(0);
+    await page.getByRole("button", { name: "解析", exact: true }).click();
+    await expect(page.getByText("正在识别链接")).toBeVisible();
+    await page.evaluate(() => window.__oldParseFeed({ event: "progress", progress: {
+      stage: "extracting", completed: 6, total: 6, succeeded: 6, failed: 0, title: "陈旧请求标题",
+    } }));
+    await expect(page.getByText("已处理 0 / 总数未知")).toBeVisible();
+    await expect(page.getByText("当前：陈旧请求标题")).toHaveCount(0);
+    await checkLayout("parse-progress-cancel-restart");
+    const progressBox = await page.locator(".parse-progress").boundingBox();
+    await page.evaluate(() => window.__parseFeed({ event: "progress", progress: {
+      stage: "listing", completed: 0, total: 6, succeeded: 0, failed: 0, title: "读取列表",
+    } }));
+    await expect(page.getByText("正在读取项目列表")).toBeVisible();
+    await page.evaluate(() => {
+      window.__parseFeed({ event: "heartbeat" });
+      window.__parseFeed({ event: "progress", progress: {
+        stage: "extracting", completed: 3, total: 6, succeeded: 2, failed: 1,
+        title: "当前中文标题 🎬 VeryLongUnbrokenProgressTitle".repeat(12),
+      } });
+    });
+    await expect(page.getByText("正在提取资源")).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveAttribute("aria-valuenow", "3");
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveAttribute("aria-valuemax", "6");
+    await expect(page.getByText("成功 2 · 失败 1")).toBeVisible();
+    const extractingBox = await page.locator(".parse-progress").boundingBox();
+    expect(extractingBox.y).toBe(progressBox.y);
+    expect(extractingBox.height).toBe(progressBox.height);
+    await checkLayout("parse-progress-known");
+    await page.evaluate(() => window.__finishParse());
     await expect(page.getByRole("button", { name: "确认规格" })).toBeVisible();
     await expect(page.locator(".workflow-steps li")).toHaveCount(3);
     const pickerBox = await page.locator(".entry-picker").boundingBox(),
@@ -358,6 +428,12 @@ try {
     await expect(page.getByText("已恢复 0 项，1 项仍解析失败，可再次重试。")).toBeVisible();
     await retryOne.click();
     await expect(page.getByRole("button", { name: "取消重试" })).toBeVisible();
+    await page.evaluate(() => window.__parseFeed({ event: "progress", progress: {
+      stage: "extracting", completed: 0, total: 1, succeeded: 0, failed: 0,
+      title: "重试中的长标题 RetryProgressLongUnbrokenTitle".repeat(12),
+    } }));
+    await expect(page.locator(".picker-retry").getByRole("progressbar")).toHaveAttribute("aria-valuemax", "1");
+    await expect(page.locator(".picker-retry").getByText("正在提取资源")).toBeVisible();
     for (const button of [retryAll, retryOne,
       page.getByRole("button", { name: "确认规格" }),
       page.getByRole("button", { name: "上一步" }),

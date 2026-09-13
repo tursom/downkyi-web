@@ -1,6 +1,5 @@
 import { ChevronDown, ChevronRight, AlertCircle, Search } from "lucide-react";
-import { Spinner } from "./components";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { duration } from "./format";
 import type { DownloadMode, ParsedEntry } from "./types";
 export function eligible(entry: ParsedEntry, mode: DownloadMode) {
@@ -20,6 +19,7 @@ export default function EntryPicker({
   mode,
   retry,
   retrying = false,
+  retryProgress,
   retryMessage,
   cancelRetry,
 }: {
@@ -29,6 +29,7 @@ export default function EntryPicker({
   mode: DownloadMode;
   retry: (ids: string[]) => void;
   retrying?: boolean;
+  retryProgress?: ReactNode;
   retryMessage: string;
   cancelRetry: () => void;
 }) {
@@ -65,7 +66,7 @@ export default function EntryPicker({
           )}
           {retrying ? (
             <>
-              <Spinner label="正在重试，最长 180 秒…" />
+              {retryProgress}
               <button type="button" className="text-link" onClick={cancelRetry}>
                 取消重试
               </button>

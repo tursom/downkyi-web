@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import ParseModal, { PARSE_TIMEOUT_MS } from "../ParseModal";
+import ParseModal from "../ParseModal";
 import { discovered, parsed, parseFeed, progress, respond, retryParsed, retryResult } from "./fixtures";
 
 function mount() {
@@ -30,7 +30,7 @@ describe("real parse progress UI", () => {
     expect(bar).not.toHaveAttribute("aria-valuenow");
     expect(screen.getByText("已处理 0 / 总数未知")).toBeVisible();
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(screen.getByText("已耗时 3 秒 · 最长 180 秒")).toBeVisible();
+    expect(screen.getByText("已耗时 3 秒")).toBeVisible();
     expect(screen.getByText("已处理 0 / 总数未知")).toBeVisible();
     await send(feed, { event: "heartbeat" });
     await send(feed, { event: "progress", progress: { ...progress, stage: "listing" } });
@@ -43,6 +43,13 @@ describe("real parse progress UI", () => {
     expect(bar).toHaveAttribute("aria-valuetext", "已处理 2 / 4");
     expect(screen.getByText("成功 1 · 失败 1")).toBeVisible();
     expect(screen.getByText(`当前：${progress.title}`)).toHaveAttribute("title", progress.title);
+    await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+    expect(feed.cancelled).toBe(false);
+    expect(screen.getByText("已耗时 603 秒")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await send(feed, { event: "progress", progress: { ...progress, completed: 3, succeeded: 2, title: "长时间解析仍在继续" } });
+    expect(bar).toHaveAttribute("aria-valuenow", "3");
+    expect(screen.getByText("当前：长时间解析仍在继续")).toBeVisible();
     await send(feed, { event: "parsed", result: discovered() });
     expect(screen.getByRole("button", { name: "解析所选项目 (0)" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "确认规格" })).not.toBeInTheDocument();
@@ -59,7 +66,7 @@ describe("real parse progress UI", () => {
     await send(feed, { event: "parsed", result: { ...parsed, entries: [parsed.entries[0]] } });
     expect(screen.getByText("已选 1 项")).toBeVisible();
   });
-  it.each(["cancel", "timeout", "close", "unmount"])("cleans up stream and both timers on %s", async (kind) => {
+  it.each(["cancel", "close", "unmount"])("cleans up stream and elapsed timer on %s", async (kind) => {
     vi.useFakeTimers();
     const feed = parseFeed();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(feed.response));
@@ -68,12 +75,10 @@ describe("real parse progress UI", () => {
     if (kind === "cancel") fireEvent.click(screen.getByRole("button", { name: "取消解析" }));
     if (kind === "close") fireEvent.click(screen.getByRole("button", { name: "关闭弹窗" }));
     if (kind === "unmount") view.unmount();
-    if (kind === "timeout") await act(async () => { await vi.advanceTimersByTimeAsync(PARSE_TIMEOUT_MS); });
     await act(async () => { await vi.advanceTimersByTimeAsync(0); });
     expect(feed.cancelled).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
     if (kind === "close") expect(view.close).toHaveBeenCalledOnce();
-    if (kind === "timeout") expect(screen.getByRole("alert")).toHaveTextContent("180 秒");
   });
   it("ignores a cancelled request's late stream without disturbing a new parse", async () => {
     let resolve!: (value: Response) => void;

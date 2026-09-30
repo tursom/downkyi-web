@@ -13,8 +13,8 @@ All paths below start /api. Session cookie authentication by default, same-origi
 - POST /discover {url} -> ParseResult containing metadata-only entries with resolution:'pending', available:false, empty qualities/codecs and null error. Does not request per-video playback formats.
 - POST /parse/{parse_id}/resolve {entry_ids:string[]} -> new merged ParseResult; 1–50 unique cached pending/failed entries. Resolves only selected URLs, preserves unselected entries and stable identity/group, and marks resolved entries ready/failed. Pending entries cannot be admitted as tasks.
 - POST /parse {url} -> ParseResult (legacy full-resolution endpoint; the Web wizard uses discover then resolve)
-- POST /parse/{parse_id}/retry {entry_ids:string[]} -> full merged ParseResult with a new cache id. Only cached unavailable entries are accepted (1–100 unique IDs); the client cannot supply URLs. Successful and unselected entries stay unchanged, and recovered entries retain original id/url/group. Failed retries keep titles/durations/covers. Old snapshots remain immutable until normal expiry; 410 means reparse the original URL. Retry shares parse authentication, concurrency, cancellation, cookie snapshots and the 180-second timeout.
-- POST /tasks {parse_id,entry_ids:string[],quality:'best'|'2160'|'1440'|'1080'|'720'|'480'|'360',mode:'video'|'audio',codec:'auto'|'avc'|'hevc'|'av1',subtitles:bool,cover:bool} -> {tasks:Task[]}. Validate server-side cache, no client-supplied media URLs. Duplicate visible tasks rejected 409. Parsing can take up to 180 seconds; support abort/loading.
+- POST /parse/{parse_id}/retry {entry_ids:string[]} -> full merged ParseResult with a new cache id. Only cached unavailable entries are accepted (1–100 unique IDs); the client cannot supply URLs. Successful and unselected entries stay unchanged, and recovered entries retain original id/url/group. Failed retries keep titles/durations/covers. Old snapshots remain immutable until normal expiry; 410 means reparse the original URL. Retry shares parse authentication, concurrency, cancellation and cookie snapshots; no overall time limit applies.
+- POST /tasks {parse_id,entry_ids:string[],quality:'best'|'2160'|'1440'|'1080'|'720'|'480'|'360',mode:'video'|'audio',codec:'auto'|'avc'|'hevc'|'av1',subtitles:bool,cover:bool} -> {tasks:Task[]}. Validate server-side cache, no client-supplied media URLs. Duplicate visible tasks rejected 409. Up to 100 tasks are admitted atomically after validation.
 - POST /tasks/{id}/pause -> Task
 - POST /tasks/{id}/resume -> Task (paused/failed, resumes or reparses)
 - DELETE /tasks/{id} -> {ok:true} stops active work and removes record, keeps files
@@ -35,10 +35,12 @@ Task download_dir is pinned on admission; files live at download_dir/id. Legacy 
 
 ParseResult = {id,title,thumbnail,entries:Entry[],truncated:bool,warnings:string[]}
 Entry = {id:string,title:string,url:string,duration:number|null,thumbnail:string,group:string,available:bool,error:string|null,qualities:number[],codecs:string[],has_subtitles:bool,resolution?:'pending'|'ready'|'failed'}
-qualities are actual available stream heights, not presumed permissions. Codes are auto/avc/hevc/av1. No hard-coded account resolution limit. Empty video qualities can still represent audio-only source. Result ID expires in 1 hour. Maximum 100 entries per parse, 50 admitted per call. Optional extra fields in future are safe to ignore.
+qualities are actual available stream heights, not presumed permissions. Codes are auto/avc/hevc/av1. No hard-coded account resolution limit. Empty video qualities can still represent audio-only source. Result ID expires in 1 hour. Maximum 100 entries per parse, 100 admitted per call. Optional extra fields in future are safe to ignore.
 
 The Web wizard first discovers metadata. A single entry is automatically resolved;
 multiple entries wait for explicit user selection with none selected initially.
+Users may select the entire list; resolution runs in sequential batches of up to
+50, accumulating progress and retaining each completed batch's merged cache ID.
 Successful resource metadata can be reused when returning to the list; unselected
 pending entries are not failures and are excluded from failure-retry batches.
 
@@ -62,13 +64,17 @@ entries. Errors before streaming use the normal HTTP error response; errors afte
 headers use `{event:"error",message:string,status:number}`. Clients must handle
 UTF-8 and lines split across network chunks and require a terminal event. Abort
 and disconnect retain the existing worker termination and snapshot cleanup rules.
-Reverse proxies must disable response buffering (as in `deploy/nginx.conf`).
+Discovery, resolution and retry have no overall time limit in the UI, API or worker.
+The UI shows completed/total counts, successes/failures, current title and elapsed
+time, with manual cancellation available. Network timeouts and bounded retries
+remain. Reverse proxies must disable response buffering (as in `deploy/nginx.conf`)
+and allow the 15-second heartbeat to keep long-running streaming responses open.
 
 ## Media Worker Contract
 
 backend/media.py implements MediaService and CLI for isolated yt-dlp work. Constructor MediaService(config), config has data_dir,download_dir. Public async parse(url:str,cookie_path:Path|None) -> dict {title,thumbnail,entries,truncated,warnings} (without cache id). Parent manages snapshots so method must not expose cookies. Expose normalize_url(url) async if convenient.
 
-Root BV/AV video URLs without an explicit `p` query discover their UGC collection through the restricted Bilibili view API, then reuse the existing paginated collection extractor. Discovery runs once per parse, after short-link resolution; child videos and download workers do not rediscover collections. Embedded episode titles/durations/covers are retained when a child cannot be extracted. Metadata discovery failures produce a safe warning and fall back to the original video. Parsing spaces extractor requests by 250ms; the existing 100-entry and 180-second limits still apply.
+Root BV/AV video URLs without an explicit `p` query discover their UGC collection through the restricted Bilibili view API, then reuse the existing paginated collection extractor. Discovery runs once per parse, after short-link resolution; child videos and download workers do not rediscover collections. Embedded episode titles/durations/covers are retained when a child cannot be extracted. Metadata discovery failures produce a safe warning and fall back to the original video. Parsing spaces extractor requests by 250ms; the existing 100-entry limit still applies, without an overall time limit.
 
 `MediaService.retry(urls, cookie_path)` runs the isolated `python -m backend.media retry -` worker. Its stdin contains `{urls, cookie_path}` selected by the server from a cached parse. It returns `{entries, warnings}` through the same bounded parsed/error protocol. Each URL is resolved without discovering its parent collection; failures are retained individually, and identity changes cannot replace the requested video. The API merges this result into a new full snapshot before returning it.
 

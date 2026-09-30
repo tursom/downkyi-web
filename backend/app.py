@@ -18,6 +18,7 @@ from yt_dlp.version import __version__ as yt_dlp_version
 from .config import Config
 from .errors import ServiceError
 from .manager import DownloadManager, public_task
+from .media import MAX_ENTRIES
 from .security import COOKIE_NAME, RequestGuard, Sessions
 from .store import Store
 
@@ -46,7 +47,7 @@ class ResolveParseInput(InputModel):
 
 class NewTasks(InputModel):
     parse_id: str = Field(min_length=1, max_length=100)
-    entry_ids: list[str] = Field(min_length=1, max_length=50)
+    entry_ids: list[str] = Field(min_length=1, max_length=MAX_ENTRIES)
     quality: Literal["best", "2160", "1440", "1080", "720", "480", "360"] = "best"
     mode: Literal["video", "audio"] = "video"
     codec: Literal["auto", "avc", "hevc", "av1"] = "auto"
@@ -180,7 +181,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
         if isinstance(error, ServiceError):
             return error
         if isinstance(error, TimeoutError):
-            return ServiceError(504, "解析超时，请减少合集范围或稍后重试")
+            return ServiceError(504, "网络请求超时，请稍后重试")
         if isinstance(error, ValueError):
             return ServiceError(422, sanitize_error(error))
         if isinstance(error, RuntimeError):
@@ -201,7 +202,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
         return await method(value, cookie)
 
     async def run_parse(request: Request, operation):
-        from .media import PARSE_TIMEOUT, validate_parse_progress
+        from .media import validate_parse_progress
         from .parse_stream import ParseResponse, wants_progress
         if parse_gate.locked():
             raise ServiceError(429, "已有解析任务进行中，请稍后重试")
@@ -234,8 +235,7 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
             await queue.put(validate_parse_progress(value).copy())
 
         async def execute(cookie):
-            async with asyncio.timeout(PARSE_TIMEOUT):
-                result = await operation(cookie, progress if streaming else None)
+            result = await operation(cookie, progress if streaming else None)
             if not isinstance(result, dict) or not result.get("entries"):
                 raise ServiceError(422, "未找到可下载的内容")
             parse_id = uuid.uuid4().hex

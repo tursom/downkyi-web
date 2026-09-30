@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import ParseModal, { PARSE_TIMEOUT_MS } from "../ParseModal";
+import ParseModal from "../ParseModal";
 import { discovered, respond, retryParsed, retryResult, task } from "./fixtures";
 
 function deferred() {
@@ -162,7 +162,7 @@ describe("retry failed parse entries", () => {
     expect(single()).toBeEnabled();
   });
 
-  it.each(["cancel", "timeout"] as const)("ignores stale success/failure after %s, without clearing the next request's busy state or timeout", async (kind) => {
+  it.each(["success", "failure"] as const)("ignores stale %s after cancellation without clearing the next request's busy state", async (kind) => {
     const { fetch, user } = await setup();
     await setChoices(user);
     vi.useFakeTimers();
@@ -170,24 +170,27 @@ describe("retry failed parse entries", () => {
     fetch.mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
     fireEvent.click(single());
     const signal = fetch.mock.calls[1][1].signal!;
-    await act(async () => { await vi.advanceTimersByTimeAsync(PARSE_TIMEOUT_MS - 1); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
     expect(signal.aborted).toBe(false);
-    if (kind === "cancel") fireEvent.click(screen.getByRole("button", { name: "取消重试" }));
-    else await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(screen.getByText("已耗时 600 秒")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "取消重试" }));
     expect(signal.aborted).toBe(true);
-    expect(screen.getByRole("alert")).toHaveTextContent(kind === "cancel" ? "重试已取消" : "180 秒");
+    expect(screen.getByRole("alert")).toHaveTextContent("重试已取消");
     expectOriginalChoices();
     fireEvent.click(single());
     await act(async () => {
-      if (kind === "cancel") old.resolve(respond(retryResult("stale", ["p3", "p5"])));
+      if (kind === "success") old.resolve(respond(retryResult("stale", ["p3", "p5"])));
       else old.reject(new Error("stale failure"));
     });
     expect(single()).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expectOriginalChoices();
-    await act(async () => { await vi.advanceTimersByTimeAsync(PARSE_TIMEOUT_MS); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(600_000); });
+    expect(fetch.mock.calls[2][1].signal?.aborted).toBe(false);
+    expect(single()).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "取消重试" }));
     expect(fetch.mock.calls[2][1].signal?.aborted).toBe(true);
-    expect(screen.getByRole("alert")).toHaveTextContent("180 秒");
+    expect(screen.getByRole("alert")).toHaveTextContent("重试已取消");
     await act(async () => { next.resolve(respond(retryResult("also-stale", ["p3"]))); });
     expectOriginalChoices();
     fetch.mockResolvedValueOnce(respond(retryResult("fresh", ["p3"])));

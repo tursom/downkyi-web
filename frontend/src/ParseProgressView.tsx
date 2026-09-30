@@ -35,7 +35,7 @@ export default function ParseProgressView({ progress, startedAt }: {
       <p className="parse-progress-title" title={progress?.title || undefined}>
         当前：{progress?.title || "等待服务器更新"}
       </p>
-      <p className="parse-progress-time">已耗时 {elapsed} 秒 · 最长 180 秒</p>
+      <p className="parse-progress-time">已耗时 {elapsed} 秒</p>
     </div>
   );
 }

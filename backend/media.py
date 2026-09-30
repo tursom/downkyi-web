@@ -30,7 +30,6 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 import urllib.request
 
 MAX_ENTRIES = 100
-PARSE_TIMEOUT = 180
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 MAX_PROTOCOL_BYTES = 4 * MAX_PROTOCOL_LINE_BYTES
 MAX_INPUT_BYTES = 16 * 1024
@@ -670,37 +669,36 @@ class MediaService:
             cwd=str(Path(__file__).resolve().parents[1]),
         )
         try:
-            async with asyncio.timeout(PARSE_TIMEOUT):
-                process.stdin.write(payload)
-                await process.stdin.drain()
-                process.stdin.close()
-                protocol = _ParseProtocol(on_progress)
-                pending = bytearray()
-                size = 0
-                while chunk := await process.stdout.read(65536):
-                    size += len(chunk)
-                    if size > MAX_PROTOCOL_BYTES:
-                        raise RuntimeError(GENERIC_ERROR)
-                    pending.extend(chunk)
-                    while b"\n" in pending:
-                        line, _, rest = pending.partition(b"\n")
-                        pending = bytearray(rest)
-                        await protocol.line(line)
-                    if len(pending) > MAX_PROTOCOL_LINE_BYTES:
-                        raise RuntimeError(GENERIC_ERROR)
-                if pending:
-                    await protocol.line(pending)  # Legacy single-JSON workers need no newline.
-                code = await process.wait()
-                event = protocol.terminal
-                if not event or code or event["event"] != "parsed":
-                    raise RuntimeError(sanitize_error((event or {}).get("message", "")))
-                return event["result"]
+            process.stdin.write(payload)
+            await process.stdin.drain()
+            process.stdin.close()
+            protocol = _ParseProtocol(on_progress)
+            pending = bytearray()
+            size = 0
+            while chunk := await process.stdout.read(65536):
+                size += len(chunk)
+                if size > MAX_PROTOCOL_BYTES:
+                    raise RuntimeError(GENERIC_ERROR)
+                pending.extend(chunk)
+                while b"\n" in pending:
+                    line, _, rest = pending.partition(b"\n")
+                    pending = bytearray(rest)
+                    await protocol.line(line)
+                if len(pending) > MAX_PROTOCOL_LINE_BYTES:
+                    raise RuntimeError(GENERIC_ERROR)
+            if pending:
+                await protocol.line(pending)  # Legacy single-JSON workers need no newline.
+            code = await process.wait()
+            event = protocol.terminal
+            if not event or code or event["event"] != "parsed":
+                raise RuntimeError(sanitize_error((event or {}).get("message", "")))
+            return event["result"]
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             raise RuntimeError(sanitize_error(exc)) from None
         finally:
-            # A deadline followed by a disconnect can cancel us more than once.
+            # User cancellation and disconnects can cancel us more than once.
             # Keep ownership of the reaper until the whole process group is gone.
             reaper = asyncio.create_task(_stop_process(process))
             cancelled = False
@@ -893,11 +891,6 @@ def download_job(job: dict, emit=_emit) -> None:
     emit({"event": "complete", "files": files, "quality": quality})
 
 
-class _ParseTimeout(BaseException):
-    # Must bypass yt-dlp's and the per-entry Exception handlers.
-    pass
-
-
 def main(argv=None) -> int:
     args = sys.argv[1:] if argv is None else argv
     try:
@@ -922,30 +915,22 @@ def main(argv=None) -> int:
 
         with open(os.devnull, "w") as sink:
             if args[0] in ("discover", "parse", "retry"):
-                def timed_out(signum, frame):
-                    raise _ParseTimeout(TIMEOUT_ERROR)
-                previous_handler = signal.signal(signal.SIGALRM, timed_out)
-                signal.alarm(PARSE_TIMEOUT)
-                try:
-                    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-                        progress_options = ({"on_progress": lambda value: emit({"event": "progress", "progress": value})}
-                                            if payload.get("progress") is True else {})
-                        if args[0] == "discover":
-                            from .discovery import discover_media
-                            result = discover_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
-                        elif args[0] == "retry":
-                            result = retry_media(payload.get("urls"), payload.get("cookie_path"), **progress_options)
-                        else:
-                            result = parse_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
-                    emit({"event": "parsed", "result": result})
-                finally:
-                    signal.alarm(0)
-                    signal.signal(signal.SIGALRM, previous_handler)
+                with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                    progress_options = ({"on_progress": lambda value: emit({"event": "progress", "progress": value})}
+                                        if payload.get("progress") is True else {})
+                    if args[0] == "discover":
+                        from .discovery import discover_media
+                        result = discover_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
+                    elif args[0] == "retry":
+                        result = retry_media(payload.get("urls"), payload.get("cookie_path"), **progress_options)
+                    else:
+                        result = parse_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
+                emit({"event": "parsed", "result": result})
             else:
                 with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                     download_job(payload, emit)
         return 0
-    except (Exception, _ParseTimeout) as exc:
+    except Exception as exc:
         _emit({"event": "error", "message": sanitize_error(exc)})
         return 1
 

@@ -144,6 +144,33 @@ def test_parse_admission_rejects_spoofed_and_duplicate_entries(client):
     assert client.post("/api/tasks", json={"parse_id": parsed["id"], "entry_ids": ["one"]}).status_code == 409
 
 
+@pytest.mark.parametrize("count", [65, 100])
+def test_admit_entire_large_list_atomically(client, monkeypatch, count):
+    login(client)
+    # Keep test tasks queued; the admission test does not need download workers.
+    monkeypatch.setattr(client.app.state.manager.wake, "set", lambda: None)
+    parsed = client.post("/api/parse", json={"url": "https://www.bilibili.com/video/complete"}).json()
+    template = parsed["entries"][0]
+    parsed["entries"] = [{**template, "id": str(index), "url": f'{template["url"]}?p={index + 1}'}
+                         for index in range(count)]
+    store = client.app.state.store
+    body = {"parse_id": "large-pending", "entry_ids": [entry["id"] for entry in parsed["entries"]]}
+    parsed["entries"][-1]["resolution"] = "pending"
+    store.save_parse(body["parse_id"], parsed)
+    assert client.post("/api/tasks", json=body).status_code == 422
+    assert store.all_tasks() == []
+    parsed["entries"][-1]["resolution"] = "ready"
+    body["parse_id"] = "large-ready"
+    store.save_parse(body["parse_id"], parsed)
+    response = client.post("/api/tasks", json=body)
+    assert response.status_code == 201, response.text
+    assert len(response.json()["tasks"]) == count
+    assert len(store.all_tasks()) == count
+    assert client.post("/api/tasks", json=body).status_code == 409
+    assert len(store.all_tasks()) == count
+    assert client.post("/api/tasks", json={**body, "entry_ids": [str(i) for i in range(101)]}).status_code == 422
+
+
 def test_complete_library_record_removal_and_file_deletion(client):
     login(client)
     task = create(client)

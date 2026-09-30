@@ -507,23 +507,34 @@ def test_failed_playlist_pagination_keeps_successful_results(monkeypatch):
     assert media.RATE_ERROR in result["warnings"]
 
 
-@pytest.mark.parametrize("timeout", [False, True])
-def test_cli_suppresses_upstream_output_and_handles_deadline(monkeypatch, capsys, timeout):
+@pytest.mark.parametrize("operation", ["parse", "discover", "retry"])
+@pytest.mark.parametrize("socket_timeout", [False, True])
+def test_cli_has_no_alarm_and_sanitizes_output(monkeypatch, capsys, operation, socket_timeout):
+    from backend import discovery
+
+    def no_alarm(*args):
+        pytest.fail("Parsing must not install a process-wide deadline")
+
     def parse(*args):
         print("cookie=secret /private/file https://private.test")
         print("cookie=secret stderr", file=sys.stderr)
-        if timeout:
-            raise media._ParseTimeout(media.TIMEOUT_ERROR)
+        if socket_timeout:
+            raise TimeoutError("socket timed out cookie=secret")
         return {"title": "Actual", "entries": [], "warnings": [], "thumbnail": "", "truncated": False}
+    monkeypatch.setattr(signal, "alarm", no_alarm)
+    monkeypatch.setattr(signal, "signal", no_alarm)
     monkeypatch.setattr(media, "parse_media", parse)
-    code = media.main(["parse", json.dumps({"url": URL})])
+    monkeypatch.setattr(media, "retry_media", parse)
+    monkeypatch.setattr(discovery, "discover_media", parse)
+    assert media._base_options(None, media._Logger())["socket_timeout"] == 20
+    code = media.main([operation, json.dumps({"url": URL, "urls": [URL]})])
     captured = capsys.readouterr()
     assert captured.err == ""
     assert "secret" not in captured.out
     event = json.loads(captured.out)
-    assert code == int(timeout)
-    assert event["event"] == ("error" if timeout else "parsed")
-    if timeout:
+    assert code == int(socket_timeout)
+    assert event["event"] == ("error" if socket_timeout else "parsed")
+    if socket_timeout:
         assert event["message"] == media.TIMEOUT_ERROR
 
 
@@ -628,13 +639,14 @@ def test_service_bounds_and_rejects_bad_protocol(monkeypatch, output):
     assert killed == [signal.SIGTERM, signal.SIGKILL]
 
 
-@pytest.mark.parametrize("cancel", [False, True])
-@pytest.mark.parametrize("operation", ["parse", "retry"])
-def test_parse_timeout_and_cancel_terminate_process_group(monkeypatch, cancel, operation):
+@pytest.mark.parametrize("operation", ["parse", "discover", "retry"])
+def test_user_cancel_terminates_process_group_without_deadline(monkeypatch, operation):
     original_spawn = asyncio.create_subprocess_exec
     processes, descendants = [], []
     ready = asyncio.Event()
-    monkeypatch.setattr(media, "PARSE_TIMEOUT", 0.3)
+    def no_deadline(*args):
+        pytest.fail("Parsing must not impose a total deadline")
+    monkeypatch.setattr(asyncio, "timeout", no_deadline)
     script = """
 import signal, subprocess, sys, time
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
@@ -657,16 +669,13 @@ time.sleep(60)
 
     async def run():
         service = media.MediaService(SimpleNamespace())
-        request = service.parse(URL) if operation == "parse" else service.retry([URL])
+        request = getattr(service, operation)([URL] if operation == "retry" else URL)
         task = asyncio.create_task(request)
-        if cancel:
-            await ready.wait()
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-        else:
-            with pytest.raises(RuntimeError, match="解析超时"):
-                await task
+        await asyncio.wait_for(ready.wait(), 3)
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
         assert processes[0].returncode is not None
         with pytest.raises(ProcessLookupError):
             os.kill(descendants[0], 0)

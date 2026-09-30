@@ -9,7 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "../App";
-import ParseModal, { PARSE_TIMEOUT_MS } from "../ParseModal";
+import ParseModal from "../ParseModal";
 import Tasks from "../Tasks";
 import { discovered, parsed, respond, system, task } from "./fixtures";
 import type { Task } from "../types";
@@ -200,7 +200,7 @@ describe("three-step parse and create", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("视频不存在");
     expect(screen.getByRole("button", { name: "读取列表" })).toBeEnabled();
   });
-  it("admits at most 50 entries and handles audio-only sources", async () => {
+  it("allows more than 50 selected audio-only entries", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
@@ -216,14 +216,13 @@ describe("three-step parse and create", () => {
     );
     render(<ParseModal onClose={vi.fn()} onCreated={vi.fn()} />);
     const user = await parseSource();
-    expect(screen.getByRole("alert")).toHaveTextContent("单次最多解析 50");
-    expect(screen.getByRole("button", { name: /解析所选项目/ })).toBeDisabled();
-    await user.click(screen.getByRole("checkbox", { name: "音频 50" }));
-    await user.click(screen.getByRole("button", { name: /解析所选项目/ }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "仅音频" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "确认规格" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "确认规格" }));
+    expect(screen.getByRole("button", { name: "加入队列 (51)" })).toBeEnabled();
   });
-  it.each(["cancel", "timeout", "unmount"] as const)(
+  it.each(["cancel", "unmount"] as const)(
     "aborts pending parse on %s without stale updates",
     async (kind) => {
       vi.useFakeTimers();
@@ -241,19 +240,13 @@ describe("three-step parse and create", () => {
         fetch.mock.calls as unknown as [string, RequestInit][]
       )[0][1].signal!;
       await act(async () => {
-        await vi.advanceTimersByTimeAsync(PARSE_TIMEOUT_MS - 1);
+        await vi.advanceTimersByTimeAsync(600_000);
       });
       expect(signal.aborted).toBe(false);
       if (kind === "cancel")
         fireEvent.click(screen.getByRole("button", { name: "取消解析" }));
       else if (kind === "unmount") unmount();
-      else
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(1);
-        });
       expect(signal.aborted).toBe(true);
-      if (kind === "timeout")
-        expect(screen.getByRole("alert")).toHaveTextContent("180 秒");
     },
   );
 });

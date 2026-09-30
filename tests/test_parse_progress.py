@@ -331,15 +331,23 @@ raise SystemExit(media.main())
 
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("endpoint", ["parse", "discover"])
-def test_http_timeout_kills_real_worker_and_cleans_cookie(tmp_path, monkeypatch, streaming, endpoint):
+def test_http_has_no_deadline_and_real_worker_finishes_with_progress(tmp_path, monkeypatch, streaming, endpoint):
     spawn_original = asyncio.create_subprocess_exec
     processes = []
-    monkeypatch.setattr(media, "PARSE_TIMEOUT", 0.2)
+    def no_deadline(*args):
+        pytest.fail("HTTP parsing must not impose a total deadline")
+    monkeypatch.setattr(asyncio, "timeout", no_deadline)
     script = '''
 import json, time
+from backend import media
+from tests.test_media import URL, fixture_info
 print(json.dumps({"event": "progress", "progress": {"stage": "resolving",
     "completed": 0, "total": None, "succeeded": 0, "failed": 0, "title": ""}}), flush=True)
-time.sleep(60)
+time.sleep(0.03)
+print(json.dumps({"event": "progress", "progress": {"stage": "extracting",
+    "completed": 1, "total": 1, "succeeded": 1, "failed": 0, "title": "Actual title"}}), flush=True)
+print(json.dumps({"event": "parsed", "result": {"title": "Actual title", "thumbnail": "",
+    "entries": [media._entry(fixture_info(), URL, "")], "truncated": False, "warnings": []}}), flush=True)
 '''
     async def spawn(*args, **kwargs):
         process = await spawn_original(sys.executable, "-c", script, **kwargs)
@@ -353,37 +361,61 @@ time.sleep(60)
         login(client)
         for _ in range(3):
             response = client.post(f"/api/{endpoint}", json={"url": URL}, headers=HEADERS if streaming else {})
+            assert response.status_code == 200
             if streaming:
                 events = [json.loads(line) for line in response.iter_lines()]
-                assert events[-1]["event"] == "error" and events[-1]["status"] == 504
-                assert sum(e["event"] == "error" for e in events) == 1
+                assert [event["event"] for event in events] == ["progress", "progress", "parsed"]
+                assert [event["progress"]["completed"] for event in events[:-1]] == [0, 1]
+                result = events[-1]["result"]
             else:
-                assert response.status_code == 504
-            assert processes[-1].returncode is not None
+                result = response.json()
+            assert result["entries"][0]["available"]
+            assert app.state.store.get_parse(result["id"])["entries"] == result["entries"]
+            assert processes[-1].returncode == 0
             assert not list((app.state.config.data_dir / "runtime").iterdir())
-        assert app.state.store.db.execute("SELECT count(*) FROM parses").fetchone()[0] == 0
+        assert app.state.store.db.execute("SELECT count(*) FROM parses").fetchone()[0] == 3
 
 
 
 @pytest.mark.parametrize("disconnect", [False, True])
 def test_asgi_live_progress_heartbeat_disconnect_and_slot_cleanup(tmp_path, monkeypatch, disconnect):
     monkeypatch.setattr(parse_stream, "HEARTBEAT_SECONDS", 0.02)
+    spawn_original = asyncio.create_subprocess_exec
+    processes = []
+    release_path = tmp_path / "release-worker"
+    result = {"title": "Actual title", "thumbnail": "", "truncated": False, "warnings": [],
+              "entries": [media._entry(fixture_info(), URL, "")]}
+    initial = encode({"event": "progress", "progress": progress(stage="resolving")})
+    final = encode({"event": "progress", "progress": progress(1, 1, 1)},
+                   {"event": "parsed", "result": result})
+    script = f'''
+import sys, time
+from pathlib import Path
+sys.stdout.buffer.write({initial!r})
+sys.stdout.flush()
+while not Path(sys.argv[1]).exists():
+    time.sleep(0.01)
+sys.stdout.buffer.write({final!r})
+sys.stdout.flush()
+'''
+    async def spawn(*args, **kwargs):
+        process = await spawn_original(sys.executable, "-c", script, str(release_path), **kwargs)
+        processes.append(process)
+        return process
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
 
     async def check():
-        release, disconnected, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
-        class Slow(FakeMedia):
+        disconnected, stopped = asyncio.Event(), asyncio.Event()
+        class Slow(media.MediaService):
             async def parse(self, url, cookie, *, on_progress=None):
                 try:
-                    if on_progress:
-                        await on_progress(progress(stage="resolving"))
-                    await release.wait()
-                    return await super().parse(url, cookie)
+                    return await super().parse(url, cookie, on_progress=on_progress)
                 finally:
                     stopped.set()
         config = replace(config_at(tmp_path), auth_mode="none")
         account = FakeAccount()
         account.cookies = True
-        app = create_app(config, account=account, media=Slow(), worker_module="tests.fake_worker")
+        app = create_app(config, account=account, media=Slow(None), worker_module="tests.fake_worker")
         async with app.router.lifespan_context(app):
             frames, events = [], []
             delivered, receiving = False, False
@@ -405,10 +437,15 @@ def test_asgi_live_progress_heartbeat_disconnect_and_slot_cleanup(tmp_path, monk
                     event = json.loads(frame["body"])
                     events.append(event)
                     if event["event"] == "progress":
-                        assert not release.is_set()  # Truly emitted during extraction.
                         assert list((config.data_dir / "runtime").iterdir())
-                    if event["event"] == "heartbeat":
-                        (disconnected if disconnect else release).set()
+                        if event["progress"]["stage"] == "resolving":
+                            assert not release_path.exists()  # Emitted while the real worker is waiting.
+                            assert processes[0].returncode is None
+                    if event["event"] == "heartbeat" and any(e["event"] == "progress" for e in events):
+                        if disconnect:
+                            disconnected.set()
+                        else:
+                            release_path.touch()
             scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
                      "http_version": "1.1", "method": "POST", "scheme": "http", "path": "/api/parse",
                      "raw_path": b"/api/parse", "query_string": b"", "root_path": "",
@@ -416,16 +453,20 @@ def test_asgi_live_progress_heartbeat_disconnect_and_slot_cleanup(tmp_path, monk
                      "client": ("127.0.0.1", 123), "server": ("testserver", 80)}
             await asyncio.wait_for(app(scope, receive, send), 2)
             assert stopped.is_set()
-            assert [e["event"] for e in events][:2] == ["progress", "heartbeat"]
+            assert any(e["event"] == "heartbeat" for e in events)
+            assert next(e for e in events if e["event"] == "progress")["progress"]["stage"] == "resolving"
             assert sum(e["event"] == "parsed" for e in events) == int(not disconnect)
+            assert processes[0].returncode is not None
+            assert app.state.store.db.execute("SELECT count(*) FROM parses").fetchone()[0] == int(not disconnect)
             assert not list((config.data_dir / "runtime").iterdir())
             # Repeat twice: leaked slots from a disconnect would cause a 429.
             for _ in range(2):
                 delivered = False
-                release.set()
+                release_path.touch()
                 async def discard(frame):
                     if frame["type"] == "http.response.start":
                         assert frame["status"] == 200
                 await asyncio.wait_for(app(scope, receive, discard), 2)
+            assert all(process.returncode is not None for process in processes)
             assert not list((config.data_dir / "runtime").iterdir())
     asyncio.run(check())

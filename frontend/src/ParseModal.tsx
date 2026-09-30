@@ -16,7 +16,7 @@ import EntryPicker, { eligible } from "./EntryPicker";
 import DownloadSpecs, { availableSpecs } from "./DownloadSpecs";
 import DownloadReview from "./DownloadReview";
 import type { DownloadOptions, ParseProgress, ParseResult, Task } from "./types";
-export const PARSE_TIMEOUT_MS = 180_000;
+const RESOLVE_BATCH_SIZE = 50;
 const steps = ["解析内容", "选择项目与规格", "确认入队"];
 export default function ParseModal({
   onClose,
@@ -50,7 +50,6 @@ export default function ParseModal({
   const [retryMessage, setRetryMessage] = useState("");
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
-  const timeout = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const heading = useRef<HTMLHeadingElement>(null);
   const progressArea = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -60,7 +59,6 @@ export default function ParseModal({
     () => () => {
       controller.current?.abort();
       controller.current = null;
-      clearTimeout(timeout.current);
     },
     [],
   );
@@ -79,16 +77,16 @@ export default function ParseModal({
       (options.codec !== "auto" && !specs.codecs.includes(options.codec)))
       ? "当前所选项目不含该画质或编码，请重新选择规格。"
       : "";
-  const valid = chosen.length > 0 && chosen.length <= 50 && !specError;
+  const valid = chosen.length > 0 && !specError;
   function abortRequest() {
     controller.current?.abort();
     controller.current = null;
-    clearTimeout(timeout.current);
   }
   function cancelParse() {
     abortRequest();
     setBusy(null);
-    setError(busy === "retry" ? "重试已取消，可以再次尝试。" : "解析已取消");
+    setError(busy === "retry" ? "重试已取消，可以再次尝试。" : busy === "resolve"
+      ? "解析已取消，已完成批次和选择已保留，可继续解析。" : "解析已取消");
   }
   function close() {
     abortRequest();
@@ -110,12 +108,6 @@ export default function ParseModal({
     setBusy("parse");
     setError("");
     setRetryMessage("");
-    timeout.current = setTimeout(() => {
-      if (controller.current !== request) return;
-      abortRequest();
-      setBusy(null);
-      setError("解析超时（180 秒），请重试或缩小内容范围。");
-    }, PARSE_TIMEOUT_MS);
     try {
       const result = await parseStream("/discover", {
         method: "POST",
@@ -129,7 +121,6 @@ export default function ParseModal({
       setListingSelection(result.entries.length === 1 ? [result.entries[0].id] : []);
       setOptions((previous) => ({ ...previous, mode: "video", quality: "best", codec: "auto" }));
       if (result.entries.length === 1) {
-        clearTimeout(timeout.current);
         controller.current = null;
         await resolveEntries(result, [result.entries[0].id], true);
       }
@@ -138,14 +129,13 @@ export default function ParseModal({
         setError(errorMessage(cause));
     } finally {
       if (controller.current === request) {
-        clearTimeout(timeout.current);
         controller.current = null;
         if (!request.signal.aborted) setBusy(null);
       }
     }
   }
   async function resolveEntries(source: ParseResult, entryIds: string[], fresh = false) {
-    if (controller.current || !entryIds.length || entryIds.length > 50) return;
+    if (controller.current || !entryIds.length) return;
     const ids = [...new Set(entryIds)];
     const unresolved = source.entries.filter((entry) =>
       ids.includes(entry.id) && (entry.resolution === "pending" ||
@@ -156,16 +146,27 @@ export default function ParseModal({
     setBusy("resolve");
     setError("");
     setRetryMessage("");
-    timeout.current = setTimeout(() => {
-      if (controller.current !== request) return;
-      abortRequest();
-      setBusy(null);
-      setError("解析超时（180 秒），列表和选择已保留，请重试。");
-    }, PARSE_TIMEOUT_MS);
+    const report = beginProgress(request);
     try {
-      const result = unresolved.length ? await parseStream(`/parse/${encodeURIComponent(source.id)}/resolve`, {
-        method: "POST", body: { entry_ids: unresolved }, signal: request.signal,
-      }, beginProgress(request)) : source;
+      let result = source;
+      let succeeded = 0, failed = 0;
+      for (let offset = 0; offset < unresolved.length; offset += RESOLVE_BATCH_SIZE) {
+        const batch = unresolved.slice(offset, offset + RESOLVE_BATCH_SIZE);
+        report({ stage: "extracting", completed: offset, total: unresolved.length, succeeded, failed, title: "" });
+        result = await parseStream(`/parse/${encodeURIComponent(result.id)}/resolve`, {
+          method: "POST", body: { entry_ids: batch }, signal: request.signal,
+        }, (next) => report({
+          ...next, completed: offset + next.completed, total: unresolved.length,
+          succeeded: succeeded + next.succeeded, failed: failed + next.failed,
+        }));
+        if (request.signal.aborted || controller.current !== request) return;
+        // Checkpoint each merged cache so cancellation/errors can resume from it.
+        setParsed(result);
+        const ready = result.entries.filter((entry) => batch.includes(entry.id) && entry.available).length;
+        succeeded += ready;
+        failed += batch.length - ready;
+        report({ stage: "extracting", completed: offset + batch.length, total: unresolved.length, succeeded, failed, title: "" });
+      }
       if (request.signal.aborted || controller.current !== request) return;
       const entries = result.entries.filter((entry) => ids.includes(entry.id));
       const mode = fresh || !scope.length
@@ -182,11 +183,10 @@ export default function ParseModal({
       if (!request.signal.aborted && controller.current === request && !isAbort(cause)) setError(
         cause instanceof ApiError && cause.status === 410
           ? "解析结果已过期，请点击「更换链接」后重新读取列表。原列表和选择已保留。"
-          : errorMessage(cause),
+          : `${errorMessage(cause)} 已完成批次和选择已保留，可继续解析。`,
       );
     } finally {
       if (controller.current === request) {
-        clearTimeout(timeout.current);
         controller.current = null;
         setBusy(null);
       }
@@ -215,12 +215,6 @@ export default function ParseModal({
     setBusy("retry");
     setError("");
     setRetryMessage("");
-    timeout.current = setTimeout(() => {
-      if (controller.current !== request) return;
-      abortRequest();
-      setBusy(null);
-      setError("重试超时（180 秒），原列表和选择已保留，请再次尝试。");
-    }, PARSE_TIMEOUT_MS);
     try {
       const result = await parseStream(
         `/parse/${encodeURIComponent(parsed.id)}/retry`,
@@ -253,7 +247,6 @@ export default function ParseModal({
       }
     } finally {
       if (controller.current === request) {
-        clearTimeout(timeout.current);
         controller.current = null;
         setBusy(null);
       }
@@ -451,7 +444,7 @@ export default function ParseModal({
         {step === 1 && parsed && (
           <button
             className="button primary"
-            disabled={!!busy || !listingSelection.length || listingSelection.length > 50}
+            disabled={!!busy || !listingSelection.length}
             onClick={() => void resolveEntries(parsed, listingSelection)}
           >
             解析所选项目 ({listingSelection.length})

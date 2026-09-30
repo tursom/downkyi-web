@@ -199,11 +199,6 @@ export default function EntryPicker({
           {entries.length ? "没有匹配的项目" : "没有可下载的项目"}
         </div>
       )}
-      {count > 50 && (
-        <div className="notice warning" role="alert">
-          单次最多创建 50 个任务，当前已选 {count} 个。
-        </div>
-      )}
     </section>
   );
 }

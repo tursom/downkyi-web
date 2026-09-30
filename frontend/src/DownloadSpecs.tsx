@@ -115,6 +115,14 @@ export default function DownloadSpecs({
           />
           下载字幕
         </label>
+        <label className="check-label">
+          <input
+            type="checkbox"
+            checked={options.danmaku}
+            onChange={(event) => update({ danmaku: event.target.checked })}
+          />
+          下载弹幕 (XML + ASS)
+        </label>
       </fieldset>
       {downloadDir && (
         <div className="destination-line">

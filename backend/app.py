@@ -53,6 +53,7 @@ class NewTasks(InputModel):
     codec: Literal["auto", "avc", "hevc", "av1"] = "auto"
     subtitles: bool = False
     cover: bool = True
+    danmaku: bool = False
 
 
 class SettingsInput(InputModel):

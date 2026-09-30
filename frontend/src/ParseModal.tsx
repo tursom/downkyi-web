@@ -43,6 +43,7 @@ export default function ParseModal({
     codec: "auto",
     cover: true,
     subtitles: false,
+    danmaku: false,
   });
   const [busy, setBusy] = useState<"parse" | "resolve" | "retry" | "create" | null>(null);
   const [progress, setProgress] = useState<ParseProgress>();

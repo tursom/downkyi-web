@@ -38,5 +38,10 @@ files = [name]
 if job["cover"]:
     (root / "cover.jpg").write_bytes(b"fake-cover-test-only")
     files.append("cover.jpg")
+if job.get("danmaku", False):
+    from backend.danmaku import convert_danmaku
+    (root / "media.danmaku.xml").write_text('<i><d p="1,1,25,16777215,0,0,user,1">fixture</d></i>')
+    convert_danmaku(root / "media.danmaku.xml", root / "media.danmaku.ass")
+    files.extend(["media.danmaku.xml", "media.danmaku.ass"])
 partial.unlink()
 emit({"event": "complete", "files": files, "quality": "720"})

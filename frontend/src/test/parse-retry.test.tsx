@@ -95,7 +95,7 @@ describe("retry failed parse entries", () => {
     await user.click(screen.getByRole("button", { name: "加入队列 (1)" }));
     expect(body(fetch, 3)).toEqual({
       parse_id: "parse-3", entry_ids: ["p1"], quality: "1440", codec: "av1",
-      mode: "audio", cover: false, subtitles: true,
+      mode: "audio", cover: false, subtitles: true, danmaku: false,
     });
     expect(onCreated).toHaveBeenCalledWith(1);
   });

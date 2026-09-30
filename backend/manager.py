@@ -28,7 +28,7 @@ PUBLIC_FIELDS = {
 
 
 def public_task(task):
-    return {key: task[key] for key in PUBLIC_FIELDS}
+    return {**{key: task[key] for key in PUBLIC_FIELDS}, "danmaku": task.get("danmaku", False)}
 
 
 def private_json(path, payload):
@@ -148,6 +148,7 @@ class DownloadManager:
                     "quality": str(max(heights)) if request.mode == "video" else "best",
                     "mode": request.mode, "codec": request.codec,
                     "subtitles": bool(request.subtitles and entry["has_subtitles"]),
+                    "danmaku": request.danmaku,
                     "cover": request.cover, "created_at": stamp, "updated_at": stamp,
                     "record_removed": False, "files_deleted": False, "source_key": source_key,
                     "files": [], "download_dir": str(self.current_directory()),
@@ -291,6 +292,7 @@ class DownloadManager:
                 private_json(runtime / "job.json", {
                     "url": task["url"], "output_dir": str(directory), "cookie_path": str(cookie) if cookie else None,
                     **{key: task[key] for key in ("quality", "mode", "codec", "subtitles", "cover")},
+                    "danmaku": task.get("danmaku", False),
                 })
                 self.store.update(task_id, status="resolving", speed=None, eta=None, error=None)
                 process = await asyncio.create_subprocess_exec(

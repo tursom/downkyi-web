@@ -169,6 +169,7 @@ describe("three-step parse and create", () => {
       mode: "audio",
       subtitles: true,
       cover: false,
+      danmaku: false,
     });
   });
   it("lets the server reject duplicates and retains review choices on 409", async () => {

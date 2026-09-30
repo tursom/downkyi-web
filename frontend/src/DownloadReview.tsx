@@ -23,6 +23,7 @@ export default function DownloadReview({
               : "仅音频"}
             {options.cover ? " · 封面" : ""}
             {options.subtitles ? " · 可用字幕" : ""}
+            {options.danmaku ? " · 弹幕 (XML + ASS)" : ""}
           </p>
         </div>
       </div>
@@ -58,6 +59,7 @@ export default function DownloadReview({
                   {[
                     options.cover && "封面",
                     options.subtitles && entry.has_subtitles && "字幕",
+                    options.danmaku && "弹幕 (XML + ASS)",
                   ]
                     .filter(Boolean)
                     .join("、") || "无"}

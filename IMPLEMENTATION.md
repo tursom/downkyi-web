@@ -14,7 +14,7 @@ All paths below start /api. Session cookie authentication by default, same-origi
 - POST /parse/{parse_id}/resolve {entry_ids:string[]} -> new merged ParseResult; 1–50 unique cached pending/failed entries. Resolves only selected URLs, preserves unselected entries and stable identity/group, and marks resolved entries ready/failed. Pending entries cannot be admitted as tasks.
 - POST /parse {url} -> ParseResult (legacy full-resolution endpoint; the Web wizard uses discover then resolve)
 - POST /parse/{parse_id}/retry {entry_ids:string[]} -> full merged ParseResult with a new cache id. Only cached unavailable entries are accepted (1–100 unique IDs); the client cannot supply URLs. Successful and unselected entries stay unchanged, and recovered entries retain original id/url/group. Failed retries keep titles/durations/covers. Old snapshots remain immutable until normal expiry; 410 means reparse the original URL. Retry shares parse authentication, concurrency, cancellation and cookie snapshots; no overall time limit applies.
-- POST /tasks {parse_id,entry_ids:string[],quality:'best'|'2160'|'1440'|'1080'|'720'|'480'|'360',mode:'video'|'audio',codec:'auto'|'avc'|'hevc'|'av1',subtitles:bool,cover:bool} -> {tasks:Task[]}. Validate server-side cache, no client-supplied media URLs. Duplicate visible tasks rejected 409. Up to 100 tasks are admitted atomically after validation.
+- POST /tasks {parse_id,entry_ids:string[],quality:'best'|'2160'|'1440'|'1080'|'720'|'480'|'360',mode:'video'|'audio',codec:'auto'|'avc'|'hevc'|'av1',subtitles:bool,cover:bool,danmaku:bool=false} -> {tasks:Task[]}. Validate server-side cache, no client-supplied media URLs. Duplicate visible tasks rejected 409. Up to 100 tasks are admitted atomically after validation.
 - POST /tasks/{id}/pause -> Task
 - POST /tasks/{id}/resume -> Task (paused/failed, resumes or reparses)
 - DELETE /tasks/{id} -> {ok:true} stops active work and removes record, keeps files
@@ -29,7 +29,7 @@ All paths below start /api. Session cookie authentication by default, same-origi
 - POST /bilibili/qr -> {id:string,url:string,image:string,expires_in:number}; image data:image/png;base64,...
 - POST /bilibili/qr/{id}/poll -> {status:'waiting'|'scanned'|'expired'|'confirmed',message:string}
 
-Task = {id:string,url,title,thumbnail,status:'queued'|'resolving'|'downloading'|'merging'|'paused'|'completed'|'failed',progress:number(0..100),downloaded_bytes:number,total_bytes:number|null,speed:number|null,eta:number|null,error:string|null,quality:string,mode:'video'|'audio',codec:string,subtitles:bool,cover:bool,created_at:string ISO,updated_at:string ISO,record_removed:bool,files_deleted:bool,source_key:string,download_dir:string}
+Task = {id:string,url,title,thumbnail,status:'queued'|'resolving'|'downloading'|'merging'|'paused'|'completed'|'failed',progress:number(0..100),downloaded_bytes:number,total_bytes:number|null,speed:number|null,eta:number|null,error:string|null,quality:string,mode:'video'|'audio',codec:string,subtitles:bool,cover:bool,danmaku:bool,created_at:string ISO,updated_at:string ISO,record_removed:bool,files_deleted:bool,source_key:string,download_dir:string}
 
 Task download_dir is pinned on admission; files live at download_dir/id. Legacy tasks are backfilled once using their initial root. Changing settings never moves existing files or changes old task paths. /system reports disk information for the current default directory; if inaccessible it returns 503 while /settings remains usable.
 
@@ -80,8 +80,10 @@ Root BV/AV video URLs without an explicit `p` query discover their UGC collectio
 
 Download subprocess invocation:
 `python -m backend.media download JOB_JSON_PATH`
-JOB JSON = {url,output_dir,cookie_path|null,quality,mode,codec,subtitles,cover}
+JOB JSON = {url,output_dir,cookie_path|null,quality,mode,codec,subtitles,cover,danmaku:bool=false}
 Output newline JSON protocol ONLY, flushed: {event:'progress',status:'resolving'|'downloading'|'merging',progress,downloaded_bytes,total_bytes,speed,eta}; {event:'complete',files:[relative filenames],quality?:string}; {event:'error',message:string}. Exit 0 only after complete. No raw upstream errors/URLs/cookies in output; sanitize URLs/query/credentials. Keep partial media for retries. Paths constrained by parent to unique task dir. Worker should validate finalized media ffprobe and artifacts; output file list trusted only after parent resolves within task dir and excludes symlinks. Cancellation parent sends POSIX process-group TERM/KILL, killing ffmpeg too. The production launcher inherits a per-task filesystem lock into media/FFmpeg children, kills the whole group on supervisor death, and prevents reuse/deletion while an old child still holds the lock. Download uses yt-dlp built-in continuation.
+
+`danmaku` is independent of ordinary subtitles and defaults to false for old task payloads and jobs, without a schema migration. When enabled, yt-dlp selects the current entry's `danmaku` XML track; `backend/danmaku.py` validates it and writes an ASS sidecar. Both `media.danmaku.xml` and `media.danmaku.ass` must exist before completion and are served through the existing file manifest/API. Missing tracks, request failures, invalid XML or conversion failures fail the task. Retries discard only these fixed danmaku outputs/partial sidecars and re-fetch XML, keeping media continuation intact. Empty valid XML produces valid empty ASS. The converter supports ordinary scrolling/reverse/top/bottom comments on a 1280×720 logical canvas; advanced/code comments and comments exceeding available display lanes remain only in raw XML. XML is bounded to 32 MiB and rejects DTD/entities. The upstream XML endpoint is a current snapshot, not a complete historical export.
 
 ## Bilibili Account Contract
 backend/bilibili.py BilibiliAccount(config) owns data_dir/cookies.txt, async methods:

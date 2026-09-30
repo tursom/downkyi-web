@@ -16,6 +16,7 @@ export const task: Task = {
   codec: "avc",
   cover: true,
   subtitles: false,
+  danmaku: false,
   record_removed: false,
   files_deleted: false,
   source_key: "source-1",

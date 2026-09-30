@@ -141,6 +141,7 @@ def test_parse_admission_rejects_spoofed_and_duplicate_entries(client):
     assert client.post("/api/tasks", json={"parse_id": parsed["id"], "entry_ids": ["one"], "url": "http://localhost"}).status_code == 422
     task = create(client)
     assert "files" not in task and "cookie_path" not in task
+    assert task["danmaku"] is False
     assert client.post("/api/tasks", json={"parse_id": parsed["id"], "entry_ids": ["one"]}).status_code == 409
 
 
@@ -209,6 +210,60 @@ def test_pause_resume_stops_process_and_preserves_partial(client):
     assert client.delete(f"/api/tasks/{task_id}").status_code == 200
     assert client.post(f"/api/tasks/{task_id}/resume").status_code == 409
     assert (root / "media.part").exists()
+
+
+def test_danmaku_without_subtitles_persists_and_files_follow_task_lifecycle(client):
+    login(client)
+    task = create(client, danmaku=True, subtitles=False, cover=False)
+    task_id = task["id"]
+    assert task["danmaku"] is True and task["subtitles"] is False
+    assert client.app.state.store.get(task_id)["danmaku"] is True
+    completed = wait_state(client, task_id, {"completed"})
+    assert completed["danmaku"] is True
+    files = client.get(f"/api/tasks/{task_id}/files").json()["files"]
+    assert {item["name"] for item in files} == {"sample.mp4", "media.danmaku.xml", "media.danmaku.ass"}
+    for item in files:
+        response = client.get(item["url"])
+        assert response.status_code == 200 and response.content
+        assert "attachment" in response.headers["content-disposition"]
+    client.cookies.clear()
+    assert client.get(files[-1]["url"]).status_code == 401
+    login(client)
+    assert client.delete(f"/api/tasks/{task_id}").status_code == 200
+    assert client.get("/api/library").json()["tasks"][0]["danmaku"] is True
+    assert client.get(files[-1]["url"]).status_code == 200
+    assert client.delete(f"/api/tasks/{task_id}/files").status_code == 200
+    assert client.get(files[-1]["url"]).status_code == 404
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_danmaku_option_survives_restart_and_legacy_tasks_default_false(tmp_path, legacy):
+    import json
+
+    cfg = config_at(tmp_path)
+    with TestClient(create_app(cfg, account=FakeAccount(), media=FakeMedia(), worker_module="tests.fake_worker")) as client:
+        login(client)
+        task = create(client, "slow-danmaku", danmaku=True)
+        task_id = task["id"]
+        wait_state(client, task_id, {"downloading"})
+        assert client.post(f"/api/tasks/{task_id}/pause").status_code == 200
+        if legacy:
+            store = client.app.state.store
+            payload = store.get(task_id)
+            del payload["danmaku"]
+            with store.lock, store.db:
+                store.db.execute("UPDATE tasks SET payload=? WHERE id=?", (json.dumps(payload), task_id))
+    with TestClient(create_app(cfg, account=FakeAccount(), media=FakeMedia(), worker_module="tests.fake_worker")) as client:
+        login(client)
+        restored = client.get("/api/tasks").json()["tasks"][0]
+        assert restored["status"] == "paused" and restored["danmaku"] is (not legacy)
+        # Change only the fixture URL to let the resumed worker finish immediately.
+        client.app.state.store.update(task_id, url="https://www.bilibili.com/video/complete")
+        assert client.post(f"/api/tasks/{task_id}/resume").status_code == 200
+        wait_state(client, task_id, {"completed"})
+        names = {item["name"] for item in client.get(f"/api/tasks/{task_id}/files").json()["files"]}
+        assert ("media.danmaku.xml" in names) is (not legacy)
+        assert ("media.danmaku.ass" in names) is (not legacy)
 
 
 @pytest.mark.parametrize("failure", ["failed", "invalid", "crash", "malformed"])

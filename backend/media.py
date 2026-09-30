@@ -29,6 +29,8 @@ import sys
 from urllib.parse import parse_qs, urljoin, urlsplit
 import urllib.request
 
+from .danmaku import DANMAKU_ERROR, convert_danmaku
+
 MAX_ENTRIES = 100
 MAX_PROTOCOL_LINE_BYTES = 1024 * 1024
 MAX_PROTOCOL_BYTES = 4 * MAX_PROTOCOL_LINE_BYTES
@@ -50,7 +52,8 @@ RETRY_CHANGED_ERROR = "该项目的信息已发生变化，请重新解析原链
 COLLECTION_ERROR = "未能确认视频所属合集，本次仅解析当前视频。"
 SAFE_ERRORS = {UNSUPPORTED, NETWORK_ERROR, TIMEOUT_ERROR, NO_FORMATS, FORMAT_ERROR,
                VALIDATION_ERROR, DEPENDENCY_ERROR, GENERIC_ERROR, RATE_ERROR,
-               AUTH_ERROR, UNAVAILABLE_ERROR, DISK_ERROR, COLLECTION_ERROR, RETRY_CHANGED_ERROR}
+               AUTH_ERROR, UNAVAILABLE_ERROR, DISK_ERROR, COLLECTION_ERROR, RETRY_CHANGED_ERROR,
+               DANMAKU_ERROR}
 BV = r"BV[0-9A-Za-z]{10}"
 VIDEO_ID = rf"(?:{BV}|av[1-9][0-9]*)"
 EXTRACTOR_NAMES = (
@@ -800,6 +803,17 @@ def _probe(path: Path, mode: str) -> dict:
         raise RuntimeError(VALIDATION_ERROR) from None
 
 
+def _danmaku_xml(root: Path, info: dict) -> Path:
+    track = (info.get("requested_subtitles") or {}).get("danmaku") or {}
+    try:
+        path = _artifact(root, track.get("filepath", ""))
+        if path.name != "media.danmaku.xml":
+            raise ValueError
+        return path
+    except (RuntimeError, ValueError, TypeError, OSError):
+        raise RuntimeError(DANMAKU_ERROR) from None
+
+
 def _manifest(root: Path, records: list[dict], job: dict) -> tuple[list[str], str]:
     if len(records) != 1:
         raise RuntimeError(VALIDATION_ERROR)
@@ -813,7 +827,8 @@ def _manifest(root: Path, records: list[dict], job: dict) -> tuple[list[str], st
     if expected_audio and not any(stream.get("codec_type") == "audio" for stream in probe["streams"]):
         raise RuntimeError(VALIDATION_ERROR)
     files = [media.name]
-    subtitles = info.get("requested_subtitles") or {}
+    subtitles = {lang: track for lang, track in (info.get("requested_subtitles") or {}).items()
+                 if lang != "danmaku"}
     thumbnails = info.get("thumbnails") or []
     if job["subtitles"] and any(not item.get("filepath") for item in subtitles.values()):
         raise RuntimeError(VALIDATION_ERROR)
@@ -832,6 +847,9 @@ def _manifest(root: Path, records: list[dict], job: dict) -> tuple[list[str], st
             if path.suffix not in extensions:
                 raise RuntimeError(VALIDATION_ERROR)
             files.append(path.name)
+    if job.get("danmaku", False):
+        files.extend([_danmaku_xml(root, info).name,
+                      _artifact(root, str(root / "media.danmaku.ass")).name])
     height = max((_number(stream.get("height"), 0) for stream in probe["streams"]), default=0)
     if job["mode"] == "video":
         if job["quality"] != "best" and height > int(job["quality"]):
@@ -845,7 +863,8 @@ def download_job(job: dict, emit=_emit) -> None:
     from yt_dlp.postprocessor.common import PostProcessor
 
     selector = _format_selector(job.get("quality"), job.get("mode"), job.get("codec"))
-    if not all(isinstance(job.get(key), bool) for key in ("subtitles", "cover")):
+    danmaku = job.get("danmaku", False)
+    if not isinstance(danmaku, bool) or not all(isinstance(job.get(key), bool) for key in ("subtitles", "cover")):
         raise ValueError(GENERIC_ERROR)
     url = canonical_url(job.get("url", ""), allow_short=False)
     if not ("/video/" in url or "/bangumi/play/ep" in url):
@@ -859,6 +878,11 @@ def download_job(job: dict, emit=_emit) -> None:
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     if any(path.is_symlink() or path.is_dir() for path in root.iterdir()):
         raise ValueError(VALIDATION_ERROR)
+    if danmaku:
+        # yt-dlp skips existing sidecars, even if a previous attempt was interrupted.
+        # Re-fetch requested danmaku while preserving all media/resume files.
+        for name in ("media.danmaku.xml", "media.danmaku.xml.part", "media.danmaku.ass", "media.danmaku.ass.part"):
+            (root / name).unlink(missing_ok=True)
     progress = _Progress(emit)
     progress.send("resolving")
     records = []
@@ -873,8 +897,9 @@ def download_job(job: dict, emit=_emit) -> None:
         "format": selector, "noplaylist": True, "playlistend": 1,
         "outtmpl": str(root / "media.%(ext)s"), "restrictfilenames": True,
         "continuedl": True, "overwrites": False, "nopart": False,
-        "merge_output_format": "mp4", "writesubtitles": job["subtitles"],
-        "writeautomaticsub": job["subtitles"], "subtitleslangs": ["all", "-danmaku"],
+        "merge_output_format": "mp4", "writesubtitles": job["subtitles"] or danmaku,
+        "writeautomaticsub": job["subtitles"],
+        "subtitleslangs": (["all"] if job["subtitles"] else ["danmaku"]) if danmaku else ["all", "-danmaku"],
         "subtitlesformat": "srt/vtt/best", "writethumbnail": job["cover"],
         "progress_hooks": [progress.download], "postprocessor_hooks": [progress.postprocess],
         "postprocessors": ([{"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "0"}]
@@ -887,6 +912,10 @@ def download_job(job: dict, emit=_emit) -> None:
         if not info or info.get("_type", "video") != "video":
             raise RuntimeError(UNSUPPORTED)
     progress.send("merging")
+    if danmaku:
+        if len(records) != 1:
+            raise RuntimeError(DANMAKU_ERROR)
+        convert_danmaku(_danmaku_xml(root, records[0]), root / "media.danmaku.ass")
     files, quality = _manifest(root, records, job)
     emit({"event": "complete", "files": files, "quality": quality})
 

@@ -26,6 +26,7 @@ export interface Task {
   codec: string;
   subtitles: boolean;
   cover: boolean;
+  danmaku: boolean;
   created_at: string;
   updated_at: string;
   record_removed: boolean;
@@ -69,6 +70,7 @@ export interface DownloadOptions {
   codec: Codec;
   subtitles: boolean;
   cover: boolean;
+  danmaku: boolean;
 }
 export interface TaskFile {
   name: string;

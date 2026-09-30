@@ -408,6 +408,25 @@ def test_manifest_rejects_symlinks_and_missing_artifacts(tmp_path, job, monkeypa
         media._manifest(tmp_path, [{"filepath": str(tmp_path / "missing.mp4")}], job)
 
 
+def test_manifest_danmaku_is_independent_and_requires_both_files(tmp_path, job, monkeypatch):
+    for name in ("media.mp4", "media.danmaku.xml", "media.danmaku.ass", "media.zh-CN.srt"):
+        (tmp_path / name).write_bytes(b"fixture")
+    monkeypatch.setattr(media, "_probe", good_probe)
+    record = {"filepath": str(tmp_path / "media.mp4"), "requested_subtitles": {
+        "danmaku": {"filepath": str(tmp_path / "media.danmaku.xml")},
+        "zh-CN": {"filepath": str(tmp_path / "media.zh-CN.srt")},
+    }}
+    assert media._manifest(tmp_path, [record], job)[0] == ["media.mp4", "media.zh-CN.srt"]
+    selected = {**job, "danmaku": True, "subtitles": False}
+    assert media._manifest(tmp_path, [record], selected)[0] == ["media.danmaku.ass", "media.danmaku.xml", "media.mp4"]
+    (tmp_path / "media.danmaku.ass").unlink()
+    with pytest.raises(RuntimeError):
+        media._manifest(tmp_path, [record], selected)
+    record["requested_subtitles"]["danmaku"]["filepath"] = str(tmp_path / "media.zh-CN.srt")
+    with pytest.raises(RuntimeError, match=media.DANMAKU_ERROR):
+        media._manifest(tmp_path, [record], selected)
+
+
 def test_real_ffprobe_generated_media(tmp_path):
     if not media.shutil.which("ffmpeg") or not media.shutil.which("ffprobe"):
         pytest.skip("FFmpeg tools are not installed")
@@ -421,7 +440,8 @@ def test_real_ffprobe_generated_media(tmp_path):
         media._probe(path, "audio")
 
 
-def test_download_options_and_completion_order(tmp_path, job, monkeypatch):
+@pytest.mark.parametrize("missing_danmaku", [False, True])
+def test_download_options_and_completion_order(tmp_path, job, monkeypatch, missing_danmaku):
     pytest.importorskip("yt_dlp")
     events, options = [], {}
     (tmp_path / "media.mp4").write_bytes(b"data")
@@ -452,6 +472,13 @@ def test_download_options_and_completion_order(tmp_path, job, monkeypatch):
         return Downloader()
 
     monkeypatch.setattr(media, "_make_ydl", make)
+    if missing_danmaku:
+        job["danmaku"] = True
+        with pytest.raises(RuntimeError, match=media.DANMAKU_ERROR):
+            media.download_job(job, events.append)
+        assert not any(event["event"] == "complete" for event in events)
+        assert options["subtitleslangs"] == ["all"]
+        return
     media.download_job(job, events.append)
     assert options["continuedl"] is True
     assert options["overwrites"] is False
@@ -539,7 +566,8 @@ def test_cli_has_no_alarm_and_sanitizes_output(monkeypatch, capsys, operation, s
 
 
 @pytest.mark.parametrize("mode", ["video", "audio"])
-def test_real_ytdlp_postprocessing_with_synthetic_local_streams(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize("subtitles_enabled,danmaku", [(False, False), (True, False), (False, True), (True, True)])
+def test_real_ytdlp_postprocessing_with_synthetic_local_streams(tmp_path, monkeypatch, mode, subtitles_enabled, danmaku):
     """Exercise real merge/conversion, after_move hooks, resume and ffprobe, offline."""
     yt_dlp = pytest.importorskip("yt_dlp")
     if not media.shutil.which("ffmpeg") or not media.shutil.which("ffprobe"):
@@ -559,9 +587,12 @@ def test_real_ytdlp_postprocessing_with_synthetic_local_streams(tmp_path, monkey
         {"format_id": "pcm", "url": "https://example.bilivideo.com/pcm", "vcodec": "none", "acodec": "pcm_s16le", "ext": "wav"},
     ]
     transfers = []
+    danmaku_transfers = []
+    xml = b'<?xml version="1.0" encoding="UTF-8"?><i><d p="0.1,1,25,16777215,0,0,user,1">Synthetic danmaku</d></i>'
 
     thumbnail = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=")
-    subtitles = {"zh-CN": [{"ext": "srt", "data": "1\n00:00:00,000 --> 00:00:00,200\nSynthetic\n"}]}
+    subtitles = {"zh-CN": [{"ext": "srt", "data": "1\n00:00:00,000 --> 00:00:00,200\nSynthetic\n"}],
+                 "danmaku": [{"ext": "xml", "url": "https://comment.bilibili.com/123.xml"}]}
 
     class LocalStreamsDL(yt_dlp.YoutubeDL):
         def extract_info(self, url, download=True, **kwargs):
@@ -571,6 +602,11 @@ def test_real_ytdlp_postprocessing_with_synthetic_local_streams(tmp_path, monkey
             }, download=download)
 
         def dl(self, name, info, **kwargs):
+            if kwargs.get("subtitle"):
+                assert info["url"] == "https://comment.bilibili.com/123.xml"
+                Path(name).write_bytes(xml)
+                danmaku_transfers.append(name)
+                return True, True
             source = {"v": video, "a": audio, "pcm": pcm}[info["format_id"]]
             transfers.append(info["format_id"])
             media.shutil.copyfile(source, name)
@@ -584,16 +620,42 @@ def test_real_ytdlp_postprocessing_with_synthetic_local_streams(tmp_path, monkey
 
     monkeypatch.setattr(media, "_make_ydl", LocalStreamsDL)
     job = {"url": URL, "output_dir": str(tmp_path / "task"), "cookie_path": None,
-           "quality": "best", "mode": mode, "codec": "auto", "subtitles": mode == "video", "cover": mode == "video"}
+           "quality": "best", "mode": mode, "codec": "auto", "subtitles": subtitles_enabled,
+           "cover": mode == "video", "danmaku": danmaku}
     events = []
+    if danmaku:
+        valid_xml, xml = xml, b"<html>upstream error</html>"
+        with pytest.raises(RuntimeError, match=media.DANMAKU_ERROR):
+            media.download_job(job, events.append)
+        assert not any(event["event"] == "complete" for event in events)
+        xml = valid_xml
+        events.clear()
     media.download_job(job, events.append)
     completed = events[-1]
     assert completed["event"] == "complete"
-    assert completed["files"] == (["media.mp4", "media.png", "media.zh-CN.srt"] if mode == "video" else ["media.m4a"])
+    expected = ["media.mp4", "media.png"] if mode == "video" else ["media.m4a"]
+    if subtitles_enabled:
+        expected.append("media.zh-CN.srt")
+    if danmaku:
+        expected.extend(["media.danmaku.xml", "media.danmaku.ass"])
+        root = tmp_path / "task"
+        assert (root / "media.danmaku.xml").read_bytes() == xml
+        assert "Synthetic danmaku" in (root / "media.danmaku.ass").read_text()
+        # Simulate a previous interrupted sidecar attempt before retrying the same media.
+        for name in ("media.danmaku.xml", "media.danmaku.xml.part", "media.danmaku.ass", "media.danmaku.ass.part"):
+            (root / name).write_bytes(b"truncated")
+    assert completed["files"] == sorted(expected)
+    assert len(danmaku_transfers) == 2 * int(danmaku)
     assert len(transfers) == (2 if mode == "video" else 1)
     media.download_job(job, events.append)
     assert events[-1] == completed
     assert len(transfers) == (2 if mode == "video" else 1)
+    assert len(danmaku_transfers) == 3 * int(danmaku)
+    if danmaku:
+        assert (root / "media.danmaku.xml").read_bytes() == xml
+        assert "Synthetic danmaku" in (root / "media.danmaku.ass").read_text()
+        assert not (root / "media.danmaku.xml.part").exists()
+        assert not (root / "media.danmaku.ass.part").exists()
 
 
 class FakeProcess:

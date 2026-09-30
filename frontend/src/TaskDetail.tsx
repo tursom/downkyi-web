@@ -267,7 +267,11 @@ export default function TaskDetail({
         <div>
           <dt>附加文件</dt>
           <dd>
-            {[task.cover && "封面", task.subtitles && "可用字幕"]
+            {[
+              task.cover && "封面",
+              task.subtitles && "可用字幕",
+              task.danmaku && "弹幕 (XML + ASS)",
+            ]
               .filter(Boolean)
               .join("、") || "无"}
           </dd>

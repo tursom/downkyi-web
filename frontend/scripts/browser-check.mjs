@@ -127,6 +127,7 @@ try {
       codec: "avc",
       subtitles: true,
       cover: true,
+      danmaku: false,
       record_removed: false,
       files_deleted: false,
       source_key: `source-${index}`,
@@ -414,7 +415,8 @@ try {
     await expect(page.getByText("正在解析所选项目的画质和资源")).toBeVisible();
     await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toBeInViewport();
     await expect(page.getByRole("button", { name: "取消解析", exact: true })).toBeInViewport();
-    await expect(page.getByText("已处理 0 / 总数未知")).toBeVisible();
+    await expect(page.getByText("已处理 0 / 5")).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "解析项目进度" })).toHaveAttribute("aria-valuemax", "5");
     const progressBox = await page.locator(".parse-progress").boundingBox();
     await page.evaluate(() => {
       window.__parseFeed({ event: "heartbeat" });
@@ -447,6 +449,9 @@ try {
     await page.getByLabel("视频编码").selectOption("av1");
     await page.getByLabel("下载字幕").check();
     await page.getByLabel("下载封面").uncheck();
+    const danmaku = page.getByRole("checkbox", { name: "下载弹幕 (XML + ASS)", exact: true });
+    await expect(danmaku).not.toBeChecked();
+    await danmaku.check();
     const retryAll = page.getByRole("button", { name: "重新解析失败项 (1)", exact: true });
     const retryOne = page.getByRole("button", { name: `重试：${entries[5].title}`, exact: true });
     await expect(retryAll).toBeVisible();
@@ -470,6 +475,7 @@ try {
       await expect(button).toBeDisabled();
     }
     await expect(page.getByLabel("画质", { exact: true })).toBeDisabled();
+    await expect(danmaku).toBeDisabled();
     await expect(page.getByRole("button", { name: "关闭弹窗" })).toBeEnabled();
     await page.locator(".picker-retry").scrollIntoViewIfNeeded();
     await checkLayout("parse-retry-pending");
@@ -482,6 +488,7 @@ try {
     await expect(page.getByLabel("视频编码")).toHaveValue("av1");
     await expect(page.getByLabel("下载字幕")).toBeChecked();
     await expect(page.getByLabel("下载封面")).not.toBeChecked();
+    await expect(danmaku).toBeChecked();
     expect(retryBodies).toEqual([{ entry_ids: ["part-5"] }, { entry_ids: ["part-5"] }]);
     await page.locator(".picker-retry").scrollIntoViewIfNeeded();
     await checkLayout("parse-retry-recovered");
@@ -492,8 +499,16 @@ try {
     await expect(page.getByLabel("画质", { exact: true })).toHaveValue("1440");
     await expect(page.getByRole("checkbox", { name: new RegExp(`^${entries[5].title}`) })).not.toBeChecked();
     expect(resolveBodies).toHaveLength(1);
+    await expect(danmaku).toBeChecked();
     await page.getByRole("button", { name: "确认规格" }).click();
     await expect(page.getByText("准备添加 4 个下载任务")).toBeVisible();
+    await expect(page.locator(".review-summary")).toContainText("弹幕 (XML + ASS)");
+    for (const row of await page.locator(".review-table tbody tr").all()) {
+      await expect(row).toContainText("弹幕 (XML + ASS)");
+    }
+    await page.getByRole("button", { name: "上一步" }).click();
+    await expect(danmaku).toBeChecked();
+    await page.getByRole("button", { name: "确认规格" }).click();
     await checkLayout("parse-review");
     duplicate = true;
     await page.getByRole("button", { name: "加入队列 (4)" }).click();
@@ -510,6 +525,7 @@ try {
       codec: "av1",
       cover: false,
       subtitles: true,
+      danmaku: true,
     });
     await page
       .getByRole("button", { name: "任务详情：浏览器测试任务 4" })

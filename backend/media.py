@@ -87,16 +87,22 @@ def sanitize_error(error: object) -> str:
     return GENERIC_ERROR
 
 
-def _split_url(value: str):
+def _split_url(value: str, *, allow_cdn_port: bool = False):
     if not isinstance(value, str) or not value or len(value) > 4096:
         raise ValueError(UNSUPPORTED)
     if re.search(r"[\x00-\x20\x7f\\]", value):
         raise ValueError(UNSUPPORTED)
     try:
         parsed = urlsplit(value)
+        # Bilibili MCDN serves HTTPS media on 8082. Page inputs still require
+        # default ports; only the guarded media/network path enables this.
+        cdn_port = (allow_cdn_port and parsed.scheme == "https"
+                    and (parsed.hostname or "").endswith(".mcdn.bilivideo.cn")
+                    and parsed.port == 8082)
         if (parsed.scheme not in ("http", "https") or parsed.username is not None
                 or parsed.password is not None or not parsed.hostname
-                or parsed.port not in (None, 443 if parsed.scheme == "https" else 80)):
+                or (parsed.port not in (None, 443 if parsed.scheme == "https" else 80)
+                    and not cdn_port)):
             raise ValueError(UNSUPPORTED)
         return parsed
     except ValueError:
@@ -228,7 +234,7 @@ class _Logger:
 
 
 def _network_url(url: str) -> None:
-    parsed = _split_url(url)
+    parsed = _split_url(url, allow_cdn_port=True)
     if not any(parsed.hostname == domain or parsed.hostname.endswith("." + domain)
                for domain in NETWORK_DOMAINS):
         raise ValueError(UNSUPPORTED)

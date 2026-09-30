@@ -1,5 +1,6 @@
 import asyncio
 import base64
+from email.message import Message
 import io
 import json
 import os
@@ -103,6 +104,78 @@ def test_private_dns_is_rejected(monkeypatch):
 def test_network_guard_rejects_redirect_targets(url):
     with pytest.raises(ValueError):
         media._NetworkGuard().http_request(urllib.request.Request(url))
+
+
+MCDN_URL = "https://xy113x207x104x10xy.mcdn.bilivideo.cn:8082/upgcxcode/video.m4s"
+
+
+def test_mcdn_media_port_is_allowed_only_for_network_requests(monkeypatch):
+    hosts = []
+    monkeypatch.setattr(media, "_public_host", hosts.append)
+    request = urllib.request.Request(MCDN_URL)
+    assert media._NetworkGuard().https_request(request) is request
+    assert hosts == ["xy113x207x104x10xy.mcdn.bilivideo.cn"]
+    with pytest.raises(ValueError):
+        media.canonical_url(MCDN_URL)
+    with pytest.raises(ValueError):
+        media.canonical_url(URL.replace(".com/", ".com:8082/"))
+
+
+@pytest.mark.parametrize("url", [
+    MCDN_URL.replace("https:", "http:"),
+    MCDN_URL.replace(":8082/", ":8083/"),
+    MCDN_URL.replace(".mcdn.bilivideo.cn", ".mcdn.bilivideo.cn.evil.test"),
+    MCDN_URL.replace(".mcdn.bilivideo.cn", ".notmcdn.bilivideo.cn"),
+    MCDN_URL.replace("xy113x207x104x10xy.mcdn.bilivideo.cn", "api.bilibili.com"),
+    MCDN_URL.replace("https://", "https://user:password@"),
+])
+def test_mcdn_port_exception_does_not_allow_other_destinations(url):
+    with pytest.raises(ValueError):
+        media._network_url(url)
+
+
+def test_mcdn_media_port_still_rejects_private_dns(monkeypatch):
+    monkeypatch.setattr(media.socket, "getaddrinfo", lambda *a, **kw: [
+        (None, None, None, None, ("192.168.1.1", 443)),
+    ])
+    with pytest.raises(ValueError):
+        media._NetworkGuard().https_request(urllib.request.Request(MCDN_URL))
+
+
+def test_ydl_media_request_and_redirect_allow_mcdn_port(monkeypatch):
+    pytest.importorskip("yt_dlp")
+    hosts, requests = [], []
+    monkeypatch.setattr(media, "_public_host", hosts.append)
+
+    class MediaHandler(urllib.request.BaseHandler):
+        handler_order = 90
+
+        def https_open(self, request):
+            requests.append(request.full_url)
+            headers = Message()
+            if request.full_url == URL:
+                headers["Location"] = MCDN_URL
+            status = 302 if headers else 200
+            response = urllib.response.addinfourl(io.BytesIO(b"media"), headers, request.full_url, status)
+            response.msg = "Found" if headers else "OK"
+            return response
+
+    from yt_dlp.networking._urllib import UrllibRH
+    original = UrllibRH._create_instance
+
+    def create_instance(self, *args, **kwargs):
+        opener = original(self, *args, **kwargs)
+        opener.add_handler(MediaHandler())
+        return opener
+
+    monkeypatch.setattr(UrllibRH, "_create_instance", create_instance)
+    with media._make_ydl(media._base_options(None, media._Logger())) as ydl:
+        for url in (MCDN_URL, URL):
+            with ydl.urlopen(url) as response:
+                assert response.read() == b"media"
+    assert requests == [MCDN_URL, URL, MCDN_URL]
+    assert hosts == ["xy113x207x104x10xy.mcdn.bilivideo.cn", "www.bilibili.com",
+                     "xy113x207x104x10xy.mcdn.bilivideo.cn"]
 
 
 @pytest.mark.parametrize("destination", ["http://127.0.0.1/private", "ftp://127.0.0.1/private", "file:///etc/passwd"])

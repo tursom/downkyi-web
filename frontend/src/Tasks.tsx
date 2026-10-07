@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   CheckCheck,
@@ -25,7 +25,6 @@ import {
   SuccessNotice,
   Thumbnail,
 } from "./components";
-import Player from "./Player";
 import TaskDetail, {
   Badge,
   canPlay,
@@ -36,6 +35,8 @@ import TaskDetail, {
   type DeleteRequest,
 } from "./TaskDetail";
 import type { Task, TaskStatus } from "./types";
+// ArtPlayer is only needed after the user chooses to play something.
+const Player = lazy(() => import("./Player"));
 type Filter = "all" | "retained" | TaskStatus;
 function matchesFilter(task: Task, filter: Filter) {
   return filter === "all" || (filter === "retained" ? task.record_removed && task.status !== "completed" : task.status === filter);
@@ -553,7 +554,9 @@ export default function Tasks({
         />
       )}
       {taskPlaying && canPlay(taskPlaying) && (
-        <Player task={taskPlaying} onClose={() => setPlaying(undefined)} />
+        <Suspense fallback={null}>
+          <Player task={taskPlaying} onClose={() => setPlaying(undefined)} />
+        </Suspense>
       )}
       {deleting && (
         <DeleteConfirmation

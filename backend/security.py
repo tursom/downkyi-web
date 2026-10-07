@@ -93,7 +93,7 @@ class RequestGuard:
                     (b"x-frame-options", b"DENY"),
                     (b"referrer-policy", b"no-referrer"),
                     (b"permissions-policy", b"camera=(), microphone=(), geolocation=()"),
-                    (b"content-security-policy", b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"),
+                    (b"content-security-policy", b"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; font-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src blob:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'"),
                 ]
                 if scope["path"].startswith("/api"):
                     message["headers"].append((b"cache-control", b"no-store"))

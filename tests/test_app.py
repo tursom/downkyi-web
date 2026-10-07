@@ -128,6 +128,8 @@ def test_settings_validation_and_security_headers(client):
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    # ArtPlayer's bundled danmaku layout worker and subtitle tracks use blob URLs.
+    assert "worker-src blob:" in response.headers["content-security-policy"]
 
 
 def test_parse_admission_rejects_spoofed_and_duplicate_entries(client):

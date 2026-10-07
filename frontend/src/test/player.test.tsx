@@ -1,61 +1,100 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseDanmaku } from "../Player";
 import Tasks from "../Tasks";
 import { respond, task } from "./fixtures";
 import type { Task } from "../types";
+
+const players = vi.hoisted(() => [] as {
+  option: Record<string, any>;
+  handlers: Record<string, () => void>;
+  destroy: ReturnType<typeof vi.fn>;
+}[]);
+vi.mock("artplayer", () => ({
+  default: vi.fn(function (this: unknown, option: Record<string, any>) {
+    const player = { option, handlers: {} as Record<string, () => void>, destroy: vi.fn() };
+    players.push(player);
+    return {
+      on: (name: string, handler: () => void) => { player.handlers[name] = handler; },
+      destroy: player.destroy,
+      subtitle: { switch: vi.fn() },
+    };
+  }),
+}));
+vi.mock("artplayer-plugin-danmuku", () => ({
+  default: vi.fn((option: Record<string, unknown>) => ({ danmakuOption: option })),
+}));
 
 const completed: Task = { ...task, status: "completed", danmaku: true, subtitles: true };
 const files = [
   { name: "media.mp4", size: 2048, url: "/api/tasks/task-1/files/media.mp4" },
   { name: "media.jpg", size: 64, url: "/api/tasks/task-1/files/media.jpg" },
   { name: "media.zh-CN.srt", size: 64, url: "/api/tasks/task-1/files/media.zh-CN.srt" },
+  { name: "media.en-US.srt", size: 64, url: "/api/tasks/task-1/files/media.en-US.srt" },
   { name: "media.danmaku.xml", size: 64, url: "/api/tasks/task-1/files/media.danmaku.xml" },
   { name: "media.danmaku.ass", size: 64, url: "/api/tasks/task-1/files/media.danmaku.ass" },
 ];
-const xml = '<i><d p="0.5,1,25,16711680,0,0,u,1">滚动</d><d p="0.1,5,25,16777215,0,0,u,2">顶部</d><d p="1,7,25,0,0,0,u,3">高级</d></i>';
+const xml = '<i><d p="0.5,1,25,16711680,0,0,u,1">滚动</d><d p="0.1,5,25,16777215,0,0,u,2">顶部</d><d p="0.2,4,25,255,0,0,u,3">底部</d><d p="1,7,25,0,0,0,u,4">高级</d></i>';
 
 function props(tasks: Task[]) {
   return { tasks, loading: false, error: "", refresh: vi.fn(), onNew: vi.fn(), onBrowse: vi.fn(), message: "" };
 }
-function playerFetch() {
-  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
+function playerFetch(list = files) {
   const fetch = vi.fn(async (url: string) =>
-    url.endsWith(".danmaku.xml") ? new Response(xml) : respond({ files }));
+    url.endsWith(".danmaku.xml") ? new Response(xml) : respond({ files: list }));
   vi.stubGlobal("fetch", fetch);
   return fetch;
 }
 
 describe("downloaded video playback", () => {
+  beforeEach(() => { players.length = 0; });
+
   it("parses supported danmaku modes in time order and skips unsupported ones", () => {
     expect(parseDanmaku(xml)).toEqual([
-      { time: 0.1, text: "顶部", mode: "top", color: "#ffffff", size: 1 },
-      { time: 0.5, text: "滚动", mode: "scroll", color: "#ff0000", size: 1 },
+      { time: 0.1, text: "顶部", mode: 1, color: "#ffffff" },
+      { time: 0.2, text: "底部", mode: 2, color: "#0000ff" },
+      { time: 0.5, text: "滚动", mode: 0, color: "#ff0000" },
     ]);
     expect(parseDanmaku("<i><d")).toEqual([]);
   });
 
-  it("plays the verified media with subtitle tracks, local cover and toggleable danmaku", async () => {
+  it("opens ArtPlayer with verified media, local cover, subtitle tracks and danmaku", async () => {
     const user = userEvent.setup(), fetch = playerFetch();
     render(<Tasks {...props([completed])} />);
     await user.click(screen.getByRole("button", { name: "播放：测试视频" }));
     const dialog = await screen.findByRole("dialog", { name: "测试视频" });
-    const video = await within(dialog).findByLabelText("播放 测试视频");
-    expect(video).toHaveAttribute("src", "/api/tasks/task-1/play/media.mp4");
-    expect(video).toHaveAttribute("poster", `${window.location.origin}/api/tasks/task-1/files/media.jpg`);
-    const track = video.querySelector("track")!;
-    expect(track).toHaveAttribute("src", "/api/tasks/task-1/subtitles/media.zh-CN.srt");
-    expect(track).toHaveAttribute("label", "zh-CN");
-    await waitFor(() => expect(fetch).toHaveBeenCalledWith(
-      `${window.location.origin}/api/tasks/task-1/files/media.danmaku.xml`, expect.anything()));
-    const toggle = within(dialog).getByRole("button", { name: "弹幕：开" });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await user.click(toggle);
-    expect(within(dialog).getByRole("button", { name: "弹幕：关" })).toHaveAttribute("aria-pressed", "false");
-    expect(dialog.querySelector(".danmaku-layer")).toBeNull();
-    fireEvent.error(video);
+    await waitFor(() => expect(players).toHaveLength(1));
+    const { option } = players[0];
+    expect(within(dialog).getByLabelText("播放 测试视频")).toBe(option.container);
+    expect(option).toMatchObject({
+      url: "/api/tasks/task-1/play/media.mp4",
+      poster: `${window.location.origin}/api/tasks/task-1/files/media.jpg`,
+      lang: "zh-cn",
+      autoPlayback: true,
+      fullscreenWeb: false,
+      subtitle: { url: "/api/tasks/task-1/subtitles/media.zh-CN.srt", name: "zh-CN", type: "vtt", escape: true },
+    });
+    expect(option.settings[0].selector.map((item: { html: string }) => item.html)).toEqual(["zh-CN", "en-US"]);
+    const danmaku = option.plugins[0].danmakuOption;
+    expect(danmaku.emitter).toBe(false);
+    expect(await danmaku.danmuku()).toHaveLength(3);
+    expect(fetch).toHaveBeenCalledWith(
+      `${window.location.origin}/api/tasks/task-1/files/media.danmaku.xml`, { credentials: "same-origin" });
+    act(() => players[0].handlers["video:error"]());
     expect(within(dialog).getByRole("alert")).toHaveTextContent("浏览器无法播放该文件");
+    await user.click(within(dialog).getByRole("button", { name: "关闭弹窗" }));
+    expect(players[0].destroy).toHaveBeenCalledWith(false);
+  });
+
+  it("skips danmaku for audio-only tasks", async () => {
+    const user = userEvent.setup();
+    playerFetch([{ name: "media.m4a", size: 1, url: "/api/tasks/task-1/files/media.m4a" }, files[4]]);
+    render(<Tasks {...props([{ ...completed, mode: "audio" }])} />);
+    await user.click(screen.getByRole("button", { name: "播放：测试视频" }));
+    await waitFor(() => expect(players).toHaveLength(1));
+    expect(players[0].option).toMatchObject({ url: "/api/tasks/task-1/play/media.m4a", poster: "", plugins: [] });
+    expect(players[0].option).not.toHaveProperty("subtitle");
   });
 
   it("offers playback only for completed tasks whose files still exist", async () => {

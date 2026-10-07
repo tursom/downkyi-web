@@ -24,6 +24,17 @@ from .store import Store
 
 logger = logging.getLogger(__name__)
 
+PLAYABLE_TYPES = {".mp4": "video/mp4", ".m4a": "audio/mp4", ".webm": "video/webm",
+                  ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".flv": "video/x-flv"}
+MAX_SUBTITLE_BYTES = 8 * 1024 * 1024
+SRT_TIMING = re.compile(r"^(\d{1,2}:\d{2}:\d{2}),(\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}),(\d{3})", re.MULTILINE)
+
+
+def srt_to_vtt(text):
+    """Browsers only render WebVTT tracks; SRT differs mainly in the millisecond separator."""
+    body = SRT_TIMING.sub(r"\1.\2 --> \3.\4", text.replace("\r\n", "\n").replace("\r", "\n"))
+    return "WEBVTT\n\n" + body.lstrip("\n")
+
 
 class InputModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -368,6 +379,26 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
         title = re.sub(r'[\\/<>:"|?*\x00-\x1f]', "_", title).strip(". ")[:150] or "video"
         filename = title + path.name[5:] if path.name.startswith("media.") else path.name
         return FileResponse(path, filename=filename, content_disposition_type="attachment")
+
+    @api.get("/tasks/{task_id}/play/{name:path}")
+    async def play_file(task_id: str, name: str):
+        # Inline playback for the verified media output only; FileResponse honours Range for seeking.
+        path = app.state.manager.manifest_path(task_id, name)
+        media_type = PLAYABLE_TYPES.get(path.suffix.lower())
+        if not media_type:
+            raise ServiceError(404, "该文件不支持在线播放")
+        return FileResponse(path, media_type=media_type)
+
+    @api.get("/tasks/{task_id}/subtitles/{name:path}")
+    async def subtitle_track(task_id: str, name: str):
+        path = app.state.manager.manifest_path(task_id, name)
+        if path.suffix.lower() not in {".srt", ".vtt"}:
+            raise ServiceError(404, "该字幕格式不支持在线播放")
+        if path.stat().st_size > MAX_SUBTITLE_BYTES:
+            raise ServiceError(413, "字幕文件过大，请下载后使用本地播放器")
+        text = (await asyncio.to_thread(path.read_bytes)).decode("utf-8-sig", errors="replace")
+        return Response(srt_to_vtt(text) if path.suffix.lower() == ".srt" else text,
+                        media_type="text/vtt; charset=utf-8")
 
     def settings_value():
         return {"concurrency": app.state.store.setting("concurrency", 2), "cookie_configured": app.state.account.configured(),

@@ -193,6 +193,47 @@ def test_complete_library_record_removal_and_file_deletion(client):
     assert not client.get("/api/library").json()["tasks"]
 
 
+def test_inline_playback_supports_ranges_and_only_manifest_media(client):
+    login(client)
+    task_id = create(client)["id"]
+    wait_state(client, task_id, {"completed"})
+    url = f"/api/tasks/{task_id}/play/sample.mp4"
+    response = client.get(url)
+    assert response.status_code == 200 and response.content == b"fake-media-test-only"
+    assert response.headers["content-type"] == "video/mp4"
+    assert "attachment" not in response.headers.get("content-disposition", "")
+    assert response.headers["accept-ranges"] == "bytes"
+    partial = client.get(url, headers={"Range": "bytes=5-9"})
+    assert partial.status_code == 206 and partial.content == b"media"
+    assert client.get(f"/api/tasks/{task_id}/play/cover.jpg").status_code == 404
+    assert client.get(f"/api/tasks/{task_id}/play/../tasks.sqlite3").status_code == 404
+    client.cookies.clear()
+    assert client.get(url).status_code == 401
+    login(client)
+    assert client.delete(f"/api/tasks/{task_id}/files").status_code == 200
+    assert client.get(url).status_code == 404
+
+
+def test_subtitle_track_converts_srt_to_webvtt(client):
+    from backend.app import srt_to_vtt
+
+    assert srt_to_vtt("1\n00:00:01,250 --> 00:01:02,000\n你好\n") == \
+        "WEBVTT\n\n1\n00:00:01.250 --> 00:01:02.000\n你好\n"
+    login(client)
+    task_id = create(client)["id"]
+    wait_state(client, task_id, {"completed"})
+    root = client.app.state.config.download_dir / task_id
+    (root / "media.zh-CN.srt").write_bytes("﻿1\r\n00:00:01,000 --> 00:00:02,500\r\n字幕\r\n".encode())
+    files = client.app.state.store.get(task_id)["files"]
+    client.app.state.store.update(task_id, files=[*files, "media.zh-CN.srt"])
+    response = client.get(f"/api/tasks/{task_id}/subtitles/media.zh-CN.srt")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/vtt")
+    assert response.text == "WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.500\n字幕\n"
+    assert client.get(f"/api/tasks/{task_id}/subtitles/sample.mp4").status_code == 404
+    assert client.get(f"/api/tasks/{task_id}/subtitles/unlisted.srt").status_code == 404
+
+
 def test_pause_resume_stops_process_and_preserves_partial(client):
     login(client)
     task = create(client, "slow")

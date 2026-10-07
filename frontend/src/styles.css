@@ -1737,3 +1737,94 @@ main {
     animation: none;
   }
 }
+.player-dialog {
+  width: 960px;
+}
+.player-dialog .dialog-heading h2 {
+  font-size: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.player-stage {
+  position: relative;
+  background: #0b1214;
+  border-radius: 6px;
+  overflow: hidden;
+  aspect-ratio: 16/9;
+}
+.player-stage video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.player-stage:fullscreen {
+  border-radius: 0;
+  aspect-ratio: auto;
+}
+.danmaku-layer {
+  position: absolute;
+  inset: 0 0 48px;
+  overflow: hidden;
+  pointer-events: none;
+}
+.danmaku {
+  position: absolute;
+  left: 0;
+  white-space: pre;
+  font-weight: 600;
+  line-height: 1.4;
+  text-shadow:
+    0 0 2px #000,
+    0 0 2px #000;
+  will-change: transform;
+}
+.danmaku.scroll {
+  transform: translateX(var(--stage-width));
+  animation: danmaku-scroll 8s linear forwards;
+}
+.danmaku.top,
+.danmaku.bottom {
+  left: 50%;
+  transform: translateX(-50%);
+  animation: danmaku-fixed 4s linear forwards;
+}
+.danmaku-layer.paused .danmaku {
+  animation-play-state: paused;
+}
+.danmaku-error {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 11px;
+  color: #ffd6dc;
+}
+@keyframes danmaku-scroll {
+  to {
+    transform: translateX(-100%);
+  }
+}
+@keyframes danmaku-fixed {
+  to {
+    opacity: 1;
+  }
+}
+.player-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 16px;
+}
+@media (max-width: 700px) {
+  .player-dialog {
+    padding: 14px;
+  }
+  .player-toolbar {
+    justify-content: flex-start;
+  }
+  .player-toolbar .button {
+    font-size: 11px;
+    padding-inline: 10px;
+  }
+}

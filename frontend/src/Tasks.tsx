@@ -5,6 +5,7 @@ import {
   FolderOpen,
   Inbox,
   ListFilter,
+  MonitorPlay,
   MoreHorizontal,
   Pause,
   Play,
@@ -24,8 +25,10 @@ import {
   SuccessNotice,
   Thumbnail,
 } from "./components";
+import Player from "./Player";
 import TaskDetail, {
   Badge,
+  canPlay,
   DeleteConfirmation,
   isActive,
   Progress,
@@ -110,6 +113,8 @@ export default function Tasks({
           : b.created_at.localeCompare(a.created_at),
     );
   const taskDetail = tasks?.find((task) => task.id === detail);
+  const [playing, setPlaying] = useState<string>();
+  const taskPlaying = tasks?.find((task) => task.id === playing);
   async function action(
     task: Task,
     operation = isActive(task) ? "pause" : "resume",
@@ -467,6 +472,14 @@ export default function Tasks({
                     <td className="time-cell">{dateTime(task.created_at)}</td>
                     <td>
                       <div className="row-actions">
+                        {canPlay(task) && (
+                          <IconButton
+                            label={`播放：${task.title}`}
+                            onClick={() => setPlaying(task.id)}
+                          >
+                            <MonitorPlay size={17} />
+                          </IconButton>
+                        )}
                         {task.status === "completed" ? (
                           <IconButton
                             label={`查看文件：${task.title}`}
@@ -531,9 +544,16 @@ export default function Tasks({
             setDeleting({ task: taskDetail, mode });
           }}
           onAction={() => singleAction(taskDetail)}
+          onPlay={() => {
+            setDetail(undefined);
+            setPlaying(taskDetail.id);
+          }}
           busy={pending.includes(taskDetail.id)}
           error={actionError}
         />
+      )}
+      {taskPlaying && canPlay(taskPlaying) && (
+        <Player task={taskPlaying} onClose={() => setPlaying(undefined)} />
       )}
       {deleting && (
         <DeleteConfirmation

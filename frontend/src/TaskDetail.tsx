@@ -3,6 +3,7 @@ import {
   Download,
   File,
   FolderOpen,
+  MonitorPlay,
   Pause,
   Play,
   RefreshCw,
@@ -31,6 +32,9 @@ export const statuses: Record<TaskStatus, string> = {
 };
 export const isActive = (task: Task) =>
   ["queued", "resolving", "downloading", "merging"].includes(task.status);
+// Only verified outputs are playable; removed records keep completed files in the library.
+export const canPlay = (task: Task) =>
+  task.status === "completed" && !task.files_deleted;
 export function Badge({ status }: { status: TaskStatus }) {
   return (
     <span className={`badge ${status}`}>
@@ -195,6 +199,7 @@ export default function TaskDetail({
   onClose,
   onDelete,
   onAction,
+  onPlay,
   busy,
   error,
 }: {
@@ -202,6 +207,7 @@ export default function TaskDetail({
   onClose: () => void;
   onDelete: (mode: "record" | "files") => void;
   onAction: () => void;
+  onPlay?: () => void;
   busy: boolean;
   error: string;
 }) {
@@ -343,6 +349,12 @@ export default function TaskDetail({
               : task.status === "failed"
                 ? "重试下载"
                 : "继续下载"}
+          </button>
+        )}
+        {onPlay && canPlay(task) && (
+          <button className="button primary" disabled={busy} onClick={onPlay}>
+            <MonitorPlay size={15} />
+            在线播放
           </button>
         )}
       </footer>

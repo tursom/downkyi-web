@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import { Download } from "lucide-react";
 import Artplayer from "artplayer";
 import artplayerPluginDanmuku, { type Danmu } from "artplayer-plugin-danmuku";
@@ -52,12 +52,14 @@ async function loadDanmaku(url: string): Promise<Danmu[]> {
   return parseDanmaku(await response.text());
 }
 
-function ArtPlayerView({ task, files, onError }: {
+function ArtPlayerView({ task, files, onError, player }: {
   task: Task;
   files: ReturnType<typeof playerFiles>;
   onError: () => void;
+  player: MutableRefObject<Artplayer | null>;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
   const errorRef = useRef(onError);
   errorRef.current = onError;
   const { media, subtitles, cover, danmaku } = files;
@@ -91,8 +93,7 @@ function ArtPlayerView({ task, files, onError }: {
       pip: wide,
       screenshot: wide,
       fullscreen: true,
-      // Web fullscreen also listens for Escape, which would close the surrounding dialog.
-      fullscreenWeb: false,
+      fullscreenWeb: true,
       miniProgressBar: true,
       subtitleOffset: tracks.length > 0,
       playsInline: true,
@@ -118,27 +119,48 @@ function ArtPlayerView({ task, files, onError }: {
             synchronousPlayback: true,
             heatmap: true,
             emitter: false,
-            // Below 512px the danmaku bar moves under the video, onto the light dialog background.
-            theme: "light",
+            // A narrow control bar has no room for the danmaku controls, and the plugin's own
+            // under-video placement covers the controls in web fullscreen; use a row of our own.
+            ...(!wide && bar.current && { mount: bar.current, theme: "light" as const }),
           })]
         : [],
     });
     art.on("video:error", () => errorRef.current());
-    return () => art.destroy(false);
+    player.current = art;
+    return () => {
+      player.current = null;
+      art.destroy(false);
+    };
     // Rebuild only when the set of playable files changes, not on task polling.
   }, [task.id, task.mode, key]);
 
-  return <div className="player-stage" ref={container} aria-label={`播放 ${task.title}`} />;
+  return (
+    <>
+      <div className="player-stage" ref={container} aria-label={`播放 ${task.title}`} />
+      <div className="player-danmaku-bar" ref={bar} />
+    </>
+  );
 }
 
 export default function Player({ task, onClose }: { task: Task; onClose: () => void }) {
   const files = useQuery<{ files: TaskFile[] }>(taskPath(task.id, "/files"));
   const [failed, setFailed] = useState(false);
+  const player = useRef<Artplayer | null>(null);
   const found = playerFiles(files.data?.files ?? []);
   const href = found.media && downloadUrl(found.media.url);
 
   return (
-    <Modal title={task.title} onClose={onClose} className="player-dialog">
+    <Modal
+      title={task.title}
+      onClose={onClose}
+      className="player-dialog"
+      onEscape={() => {
+        // Escape leaves web fullscreen first; a second press closes the dialog.
+        if (!player.current?.fullscreenWeb) return false;
+        player.current.fullscreenWeb = false;
+        return true;
+      }}
+    >
       <ErrorNotice message={files.error} retry={files.refresh} />
       {files.loading && !files.data ? (
         <Spinner label="正在读取文件" />
@@ -146,7 +168,7 @@ export default function Player({ task, onClose }: { task: Task; onClose: () => v
         files.data && <EmptyState icon={<Download size={24} />} title="没有可播放的媒体文件" />
       ) : (
         <>
-          <ArtPlayerView task={task} files={found} onError={() => setFailed(true)} />
+          <ArtPlayerView task={task} files={found} player={player} onError={() => setFailed(true)} />
           {failed && (
             <ErrorNotice message="浏览器无法播放该文件。HEVC、AV1 等编码或 MKV/FLV 容器可能不受当前浏览器支持，可下载后用本地播放器观看。" />
           )}

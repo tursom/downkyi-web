@@ -1745,7 +1745,7 @@ main {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-/* ArtPlayer fills this box; its danmaku bar may sit below the video on narrow screens. */
+/* ArtPlayer fills this box. */
 .player-stage {
   width: 100%;
   aspect-ratio: 16/9;
@@ -1762,9 +1762,45 @@ main {
   gap: 9px;
   margin-top: 16px;
 }
-.player-stage:has(.art-video-player > .artplayer-plugin-danmuku) + .player-toolbar,
-.player-stage:has(.art-video-player > .artplayer-plugin-danmuku) + .notice {
-  margin-top: 56px;
+.player-danmaku-bar {
+  margin-top: 10px;
+}
+.player-danmaku-bar:empty {
+  display: none;
+}
+/* Phone-width players: the control bar also takes the danmaku buttons in fullscreen, so trim it.
+   Web fullscreen re-parents the player to <body>, so these rules cannot be scoped to .player-stage.
+   ArtPlayer sets control display/padding inline and the plugin uses attribute selectors, hence !important.
+   Phones keep hardware volume keys, so the volume control is the first thing to go. */
+@media (max-width: 560px) {
+  /* ArtPlayer injects its stylesheet after ours, so equal-specificity variables would lose. */
+  .player-stage .art-video-player,
+  .art-video-player:is(.art-fullscreen, .art-fullscreen-web) {
+    --art-control-height: 36px;
+    --art-control-icon-scale: 1;
+  }
+  .art-video-player .art-control-volume {
+    display: none !important;
+  }
+  .art-video-player .art-controls-center .artplayer-plugin-danmuku {
+    gap: 8px !important;
+  }
+  .art-video-player:is(.art-fullscreen, .art-fullscreen-web) .artplayer-plugin-danmuku :is(.apd-config-icon, .apd-toggle-on, .apd-toggle-off) {
+    width: 24px;
+    height: 24px;
+  }
+}
+@media (max-width: 360px) {
+  .player-stage .art-video-player,
+  .art-video-player:is(.art-fullscreen, .art-fullscreen-web) {
+    --art-control-height: 32px;
+  }
+  .art-video-player .art-control-time {
+    padding: 0 4px !important;
+  }
+  .art-video-player .art-controls-center {
+    padding: 0 !important;
+  }
 }
 @media (max-width: 700px) {
   .player-dialog {

@@ -10,16 +10,20 @@ const players = vi.hoisted(() => [] as {
   option: Record<string, any>;
   handlers: Record<string, () => void>;
   destroy: ReturnType<typeof vi.fn>;
+  instance: { fullscreenWeb: boolean };
 }[]);
 vi.mock("artplayer", () => ({
   default: vi.fn(function (this: unknown, option: Record<string, any>) {
-    const player = { option, handlers: {} as Record<string, () => void>, destroy: vi.fn() };
-    players.push(player);
-    return {
-      on: (name: string, handler: () => void) => { player.handlers[name] = handler; },
-      destroy: player.destroy,
+    const destroy = vi.fn();
+    const handlers: Record<string, () => void> = {};
+    const instance = {
+      fullscreenWeb: false,
+      on: (name: string, handler: () => void) => { handlers[name] = handler; },
+      destroy,
       subtitle: { switch: vi.fn() },
     };
+    players.push({ option, handlers, destroy, instance });
+    return instance;
   }),
 }));
 vi.mock("artplayer-plugin-danmuku", () => ({
@@ -72,7 +76,7 @@ describe("downloaded video playback", () => {
       poster: `${window.location.origin}/api/tasks/task-1/files/media.jpg`,
       lang: "zh-cn",
       autoPlayback: true,
-      fullscreenWeb: false,
+      fullscreenWeb: true,
       subtitle: { url: "/api/tasks/task-1/subtitles/media.zh-CN.srt", name: "zh-CN", type: "vtt", escape: true },
     });
     expect(option.settings[0].selector.map((item: { html: string }) => item.html)).toEqual(["zh-CN", "en-US"]);
@@ -83,7 +87,13 @@ describe("downloaded video playback", () => {
       `${window.location.origin}/api/tasks/task-1/files/media.danmaku.xml`, { credentials: "same-origin" });
     act(() => players[0].handlers["video:error"]());
     expect(within(dialog).getByRole("alert")).toHaveTextContent("浏览器无法播放该文件");
-    await user.click(within(dialog).getByRole("button", { name: "关闭弹窗" }));
+    // Escape leaves web fullscreen without closing the dialog; the next press closes it.
+    players[0].instance.fullscreenWeb = true;
+    await user.keyboard("{Escape}");
+    expect(players[0].instance.fullscreenWeb).toBe(false);
+    expect(dialog).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(dialog).not.toBeInTheDocument());
     expect(players[0].destroy).toHaveBeenCalledWith(false);
   });
 

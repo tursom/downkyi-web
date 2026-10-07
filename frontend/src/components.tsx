@@ -115,6 +115,7 @@ export function Modal({
   busy = false,
   wide = false,
   className = "",
+  onEscape,
 }: {
   title: string;
   children: ReactNode;
@@ -122,13 +123,17 @@ export function Modal({
   busy?: boolean;
   wide?: boolean;
   className?: string;
+  /** Lets content consume Escape first (for example, leaving web fullscreen); return true when handled. */
+  onEscape?: () => boolean;
 }) {
   const titleId = useId();
   const dialog = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   const busyRef = useRef(busy);
+  const escapeRef = useRef(onEscape);
   closeRef.current = onClose;
   busyRef.current = busy;
+  escapeRef.current = onEscape;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     const root = document.getElementById("root");
@@ -155,6 +160,7 @@ export function Modal({
     function keydown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         event.preventDefault();
+        if (escapeRef.current?.()) return;
         if (!busyRef.current) closeRef.current();
       }
       if (event.key === "Tab") {

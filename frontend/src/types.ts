@@ -33,6 +33,8 @@ export interface Task {
   files_deleted: boolean;
   source_key: string;
   download_dir?: string;
+  /** Collection, multi-part video or season the task was queued from; "" when standalone. */
+  group?: string;
 }
 export interface ParsedEntry {
   resolution?: "pending" | "ready" | "failed";

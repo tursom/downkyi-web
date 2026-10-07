@@ -28,7 +28,8 @@ PUBLIC_FIELDS = {
 
 
 def public_task(task):
-    return {**{key: task[key] for key in PUBLIC_FIELDS}, "danmaku": task.get("danmaku", False)}
+    return {**{key: task[key] for key in PUBLIC_FIELDS}, "danmaku": task.get("danmaku", False),
+            "group": task.get("group", "")}
 
 
 def private_json(path, payload):
@@ -60,6 +61,7 @@ class DownloadManager:
         if self.store.setting("download_dir") is None:
             self.config.download_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.store.recover()
+        self.store.backfill_groups()
         self.scheduler = asyncio.create_task(self._schedule())
 
     async def close(self):
@@ -142,6 +144,8 @@ class DownloadManager:
                 stamp = now_iso()
                 created.append({
                     "id": uuid.uuid4().hex, "url": entry["url"], "title": entry["title"],
+                    # Collection, multi-part video or season name; "" for a standalone video.
+                    "group": entry.get("group") or "",
                     "thumbnail": entry.get("thumbnail") or parsed.get("thumbnail", ""),
                     "status": "queued", "progress": 0, "downloaded_bytes": 0,
                     "total_bytes": None, "speed": None, "eta": None, "error": None,

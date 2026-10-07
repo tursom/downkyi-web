@@ -351,3 +351,35 @@ def test_restart_recovers_active_queue_and_keeps_paused(tmp_path):
         assert records[paused["id"]]["status"] == "paused"
         assert client.get("/api/settings").json()["concurrency"] == 1
         assert client.get(f'/api/tasks/{active["id"]}/files').json()["files"] == []
+
+
+def test_tasks_keep_collection_group_and_legacy_tasks_backfill_from_parses(tmp_path):
+    import json
+
+    cfg = config_at(tmp_path)
+    with TestClient(create_app(cfg, account=FakeAccount(), media=FakeMedia(), worker_module="tests.fake_worker")) as client:
+        login(client)
+        task = create(client, "slow-grouped")
+        assert task["group"] == "视频"
+        legacy = create(client, "slow-legacy")
+        orphan = create(client, "slow-orphan")
+        for item in (task, legacy, orphan):
+            assert client.post(f'/api/tasks/{item["id"]}/pause').status_code == 200
+        store = client.app.state.store
+        for item in (legacy, orphan):
+            payload = store.get(item["id"])
+            del payload["group"]
+            with store.lock, store.db:
+                store.db.execute("UPDATE tasks SET payload=? WHERE id=?", (json.dumps(payload), item["id"]))
+        with store.lock, store.db:
+            # Expired parses survive until the next save, which is what the backfill relies on.
+            store.db.execute("UPDATE parses SET expires=0")
+            store.db.execute("DELETE FROM parses WHERE payload LIKE '%slow-orphan%'")
+            for (parse_id, payload) in store.db.execute("SELECT id, payload FROM parses").fetchall():
+                parsed = json.loads(payload)
+                parsed["entries"][0]["group"] = "合集·中世纪"
+                store.db.execute("UPDATE parses SET payload=? WHERE id=?", (json.dumps(parsed), parse_id))
+    with TestClient(create_app(cfg, account=FakeAccount(), media=FakeMedia(), worker_module="tests.fake_worker")) as client:
+        login(client)
+        groups = {t["id"]: t["group"] for t in client.get("/api/tasks").json()["tasks"]}
+        assert groups == {task["id"]: "视频", legacy["id"]: "合集·中世纪", orphan["id"]: ""}

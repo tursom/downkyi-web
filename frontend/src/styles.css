@@ -785,6 +785,73 @@ main {
 .task-table tbody tr:hover {
   background: #fbfdfc;
 }
+.task-table tr.group-row td {
+  height: 52px;
+  background: #f8fbfa;
+}
+.task-table tbody tr.group-row:hover td {
+  background: #f2f8f6;
+}
+.group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 0;
+  color: #38494f;
+  text-align: left;
+}
+.group-toggle svg {
+  flex-shrink: 0;
+  color: #5d7d80;
+}
+.group-toggle strong {
+  font-size: 12px;
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-toggle span {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: #667f84;
+  background: #e9f0ef;
+  border-radius: 9px;
+  padding: 2px 7px;
+}
+.group-toggle:hover strong {
+  color: var(--accent);
+}
+/* Indent members so their thumbnails line up under the group name. */
+.task-table tr.group-member td:nth-child(2) {
+  padding-left: 23px;
+}
+.group-status span {
+  display: block;
+  white-space: nowrap;
+  line-height: 1.6;
+}
+.group-status .active {
+  color: #27775e;
+}
+.group-status .failed {
+  color: #a94960;
+}
+.group-view {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: #5a747b;
+  padding: 4px 8px;
+  border-radius: 4px;
+  margin-right: 6px;
+}
+.group-view.active {
+  color: var(--accent-dark);
+  background: #e7f3ee;
+}
 .list-footer {
   display: flex;
   justify-content: space-between;

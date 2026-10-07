@@ -1,9 +1,12 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ArrowDown,
   CheckCheck,
+  ChevronDown,
+  ChevronRight,
   FolderOpen,
   Inbox,
+  Layers,
   ListFilter,
   MonitorPlay,
   MoreHorizontal,
@@ -16,7 +19,7 @@ import {
   X,
 } from "lucide-react";
 import { api, errorMessage, isAbort, taskPath } from "./api";
-import { bytes, dateTime } from "./format";
+import { bytes, dateTime, percent } from "./format";
 import {
   EmptyState,
   ErrorNotice,
@@ -34,6 +37,7 @@ import TaskDetail, {
   statuses,
   type DeleteRequest,
 } from "./TaskDetail";
+import { groupSummary, groupTasks } from "./grouping";
 import type { Task, TaskStatus } from "./types";
 // ArtPlayer is only needed after the user chooses to play something.
 const Player = lazy(() => import("./Player"));
@@ -51,6 +55,24 @@ const filters: Filter[] = [
   "failed",
   "completed",
 ];
+// View preferences are per-browser conveniences; storage may be unavailable.
+function loadPreference<T>(key: string, fallback: T): T {
+  try {
+    const value = localStorage.getItem(key);
+    return value === null ? fallback : (JSON.parse(value) as T);
+  } catch {
+    return fallback;
+  }
+}
+function savePreference(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Ignore: the view still works for this visit. */
+  }
+}
+const GROUP_VIEW = "downkyi:group-view";
+const COLLAPSED = "downkyi:collapsed-groups";
 export default function Tasks({
   tasks,
   loading,
@@ -75,6 +97,15 @@ export default function Tasks({
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("newest");
+  const [grouped, setGrouped] = useState(() => loadPreference(GROUP_VIEW, true));
+  const [collapsed, setCollapsed] = useState<string[]>(() => loadPreference(COLLAPSED, []));
+  function toggleGroup(name: string) {
+    setCollapsed((names) => {
+      const next = names.includes(name) ? names.filter((item) => item !== name) : [...names, name];
+      savePreference(COLLAPSED, next);
+      return next;
+    });
+  }
   const [selected, setSelected] = useState<string[]>([]);
   const [pending, setPending] = useState<string[]>([]);
   const pendingRef = useRef(new Set<string>());
@@ -102,7 +133,7 @@ export default function Tasks({
     .filter(
       (task) =>
         matchesFilter(task, filter) &&
-        `${task.title} ${task.url}`
+        `${task.title} ${task.group ?? ""} ${task.url}`
           .toLowerCase()
           .includes(search.trim().toLowerCase()),
     )
@@ -167,6 +198,186 @@ export default function Tasks({
   const allSelected =
     visible.length > 0 && visible.every((task) => selected.includes(task.id));
   const selectedTasks = visible.filter((task) => selected.includes(task.id));
+  function renderRow(task: Task, inGroup = false) {
+    return (
+      <tr key={task.id} className={inGroup ? "group-member" : undefined}>
+        <td>
+          <input
+            type="checkbox"
+            aria-label={`选择 ${task.title}`}
+            checked={selected.includes(task.id)}
+            onChange={() =>
+              setSelected((ids) =>
+                ids.includes(task.id)
+                  ? ids.filter((id) => id !== task.id)
+                  : [...ids, task.id],
+              )
+            }
+          />
+        </td>
+        <td>
+          <div className="table-title">
+            <Thumbnail src={task.thumbnail} title={task.title} />
+            <div>
+              <button
+                className="task-title"
+                title={task.title}
+                onClick={() => {
+                  setActionError("");
+                  setDetail(task.id);
+                }}
+              >
+                {task.title}
+              </button>
+              <span>
+                {task.mode === "audio"
+                  ? "仅音频"
+                  : task.codec.toUpperCase()}
+              </span>
+              {(task.record_removed || task.files_deleted) && (
+                <span className="record-state">
+                  {task.files_deleted
+                    ? "文件已删除"
+                    : task.status !== "completed" ? "记录已移除 · 临时文件待清理" : "记录已移除 · 文件保留"}
+                </span>
+              )}
+            </div>
+          </div>
+        </td>
+        <td>
+          <span className="quality">
+            {task.mode === "audio"
+              ? "音频"
+              : task.quality === "best"
+                ? "最佳"
+                : task.quality}
+          </span>
+        </td>
+        <td>{bytes(task.total_bytes)}</td>
+        <td>
+          <Badge status={task.status} />
+        </td>
+        <td>
+          <Progress task={task} />
+        </td>
+        <td className="time-cell">{dateTime(task.created_at)}</td>
+        <td>
+          <div className="row-actions">
+            {canPlay(task) && (
+              <IconButton
+                label={`播放：${task.title}`}
+                onClick={() => setPlaying(task.id)}
+              >
+                <MonitorPlay size={17} />
+              </IconButton>
+            )}
+            {task.status === "completed" ? (
+              <IconButton
+                label={`查看文件：${task.title}`}
+                onClick={() => setDetail(task.id)}
+              >
+                <FolderOpen size={17} />
+              </IconButton>
+            ) : (
+              <IconButton
+                label={`${isActive(task) ? "暂停" : task.status === "failed" ? "重试" : "恢复"}：${task.title}`}
+                disabled={pending.includes(task.id)}
+                onClick={() => singleAction(task)}
+              >
+                {isActive(task) ? (
+                  <Pause size={17} />
+                ) : task.status === "failed" ? (
+                  <RefreshCw size={17} />
+                ) : (
+                  <Play size={17} />
+                )}
+              </IconButton>
+            )}
+            <IconButton
+              label={`任务详情：${task.title}`}
+              onClick={() => {
+                setActionError("");
+                setDetail(task.id);
+              }}
+            >
+              <MoreHorizontal size={19} />
+            </IconButton>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+  function renderGroup(name: string, members: Task[]) {
+    const open = !collapsed.includes(name);
+    const summary = groupSummary(members);
+    const chosen = members.filter((task) => selected.includes(task.id)).length;
+    const value = percent(summary.progress);
+    return (
+      <Fragment key={`group:${name}`}>
+        <tr className="group-row">
+          <td>
+            <input
+              type="checkbox"
+              aria-label={`选择合集 ${name}`}
+              checked={chosen === members.length}
+              ref={(node) => {
+                if (node) node.indeterminate = chosen > 0 && chosen < members.length;
+              }}
+              onChange={() =>
+                setSelected((ids) =>
+                  chosen === members.length
+                    ? ids.filter((id) => !members.some((task) => task.id === id))
+                    : [...new Set([...ids, ...members.map((task) => task.id)])],
+                )
+              }
+            />
+          </td>
+          <td>
+            <button
+              className="group-toggle"
+              aria-expanded={open}
+              title={name}
+              onClick={() => toggleGroup(name)}
+            >
+              {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              <Layers size={15} />
+              <strong>{name}</strong>
+              <span>{members.length} 个视频</span>
+            </button>
+          </td>
+          <td />
+          <td>{bytes(summary.size)}</td>
+          <td className="group-status">
+            <span>已完成 {summary.completed}/{members.length}</span>
+            {summary.active > 0 && <span className="active">进行中 {summary.active}</span>}
+            {summary.paused > 0 && <span>已暂停 {summary.paused}</span>}
+            {summary.failed > 0 && <span className="failed">失败 {summary.failed}</span>}
+          </td>
+          <td>
+            <div className={`progress-cell ${summary.completed === members.length ? "completed" : summary.failed ? "failed" : "downloading"}`}>
+              <div className="progress-caption">
+                <span>合集进度</span>
+                <strong>{value.toFixed(1)}%</strong>
+              </div>
+              <div
+                className="progress-track"
+                role="progressbar"
+                aria-label={`${name} 合集进度`}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={value}
+              >
+                <i style={{ width: `${value}%` }} />
+              </div>
+            </div>
+          </td>
+          <td className="time-cell">{dateTime(summary.latest)}</td>
+          <td />
+        </tr>
+        {open && members.map((task) => renderRow(task, true))}
+      </Fragment>
+    );
+  }
   return (
     <>
       <header className="page-heading">
@@ -335,6 +546,17 @@ export default function Tasks({
             </div>
           )}
           <div className="sort-control">
+            <button
+              className={`group-view${grouped ? " active" : ""}`}
+              aria-pressed={grouped}
+              onClick={() => {
+                setGrouped(!grouped);
+                savePreference(GROUP_VIEW, !grouped);
+              }}
+            >
+              <Layers size={14} />
+              按合集分组
+            </button>
             <ListFilter size={14} />
             <select
               aria-label="排序方式"
@@ -409,113 +631,13 @@ export default function Tasks({
                 </tr>
               </thead>
               <tbody>
-                {visible.map((task) => (
-                  <tr key={task.id}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        aria-label={`选择 ${task.title}`}
-                        checked={selected.includes(task.id)}
-                        onChange={() =>
-                          setSelected((ids) =>
-                            ids.includes(task.id)
-                              ? ids.filter((id) => id !== task.id)
-                              : [...ids, task.id],
-                          )
-                        }
-                      />
-                    </td>
-                    <td>
-                      <div className="table-title">
-                        <Thumbnail src={task.thumbnail} title={task.title} />
-                        <div>
-                          <button
-                            className="task-title"
-                            title={task.title}
-                            onClick={() => {
-                              setActionError("");
-                              setDetail(task.id);
-                            }}
-                          >
-                            {task.title}
-                          </button>
-                          <span>
-                            {task.mode === "audio"
-                              ? "仅音频"
-                              : task.codec.toUpperCase()}
-                          </span>
-                          {(task.record_removed || task.files_deleted) && (
-                            <span className="record-state">
-                              {task.files_deleted
-                                ? "文件已删除"
-                                : task.status !== "completed" ? "记录已移除 · 临时文件待清理" : "记录已移除 · 文件保留"}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                    <td>
-                      <span className="quality">
-                        {task.mode === "audio"
-                          ? "音频"
-                          : task.quality === "best"
-                            ? "最佳"
-                            : task.quality}
-                      </span>
-                    </td>
-                    <td>{bytes(task.total_bytes)}</td>
-                    <td>
-                      <Badge status={task.status} />
-                    </td>
-                    <td>
-                      <Progress task={task} />
-                    </td>
-                    <td className="time-cell">{dateTime(task.created_at)}</td>
-                    <td>
-                      <div className="row-actions">
-                        {canPlay(task) && (
-                          <IconButton
-                            label={`播放：${task.title}`}
-                            onClick={() => setPlaying(task.id)}
-                          >
-                            <MonitorPlay size={17} />
-                          </IconButton>
-                        )}
-                        {task.status === "completed" ? (
-                          <IconButton
-                            label={`查看文件：${task.title}`}
-                            onClick={() => setDetail(task.id)}
-                          >
-                            <FolderOpen size={17} />
-                          </IconButton>
-                        ) : (
-                          <IconButton
-                            label={`${isActive(task) ? "暂停" : task.status === "failed" ? "重试" : "恢复"}：${task.title}`}
-                            disabled={pending.includes(task.id)}
-                            onClick={() => singleAction(task)}
-                          >
-                            {isActive(task) ? (
-                              <Pause size={17} />
-                            ) : task.status === "failed" ? (
-                              <RefreshCw size={17} />
-                            ) : (
-                              <Play size={17} />
-                            )}
-                          </IconButton>
-                        )}
-                        <IconButton
-                          label={`任务详情：${task.title}`}
-                          onClick={() => {
-                            setActionError("");
-                            setDetail(task.id);
-                          }}
-                        >
-                          <MoreHorizontal size={19} />
-                        </IconButton>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {grouped
+                  ? groupTasks(visible, sort).map((section) =>
+                      section.kind === "task"
+                        ? renderRow(section.task)
+                        : renderGroup(section.name, section.tasks),
+                    )
+                  : visible.map((task) => renderRow(task))}
               </tbody>
             </table>
           </div>

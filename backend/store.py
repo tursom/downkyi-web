@@ -88,6 +88,23 @@ class Store:
             self.db.execute("INSERT INTO parses VALUES(?,?,?)", (parse_id, time.time() + 3600, json.dumps(payload)))
             self.db.execute("DELETE FROM parses WHERE id NOT IN (SELECT id FROM parses ORDER BY expires DESC LIMIT 50)")
 
+    def backfill_groups(self):
+        """Give tasks created before collection grouping the group of their parse entry.
+
+        Expired parses are only purged on the next save, so this runs at startup and
+        matches by URL; tasks without a surviving parse become ungrouped ("")."""
+        with self.lock, self.db:
+            groups = {}
+            for (payload,) in self.db.execute("SELECT payload FROM parses ORDER BY expires"):
+                for entry in json.loads(payload).get("entries", []):
+                    if isinstance(entry.get("url"), str) and isinstance(entry.get("group"), str):
+                        groups[entry["url"]] = entry["group"]
+            for (task_id, payload) in self.db.execute("SELECT id, payload FROM tasks").fetchall():
+                task = json.loads(payload)
+                if "group" not in task:
+                    task["group"] = groups.get(task["url"], "")
+                    self.db.execute("UPDATE tasks SET payload=? WHERE id=?", (json.dumps(task), task_id))
+
     def get_parse(self, parse_id):
         with self.lock:
             row = self.db.execute("SELECT payload FROM parses WHERE id=? AND expires>?", (parse_id, time.time())).fetchone()

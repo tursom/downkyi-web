@@ -542,7 +542,7 @@ def test_cli_has_no_alarm_and_sanitizes_output(monkeypatch, capsys, operation, s
     def no_alarm(*args):
         pytest.fail("Parsing must not install a process-wide deadline")
 
-    def parse(*args):
+    def parse(*args, **kwargs):
         print("cookie=secret /private/file https://private.test")
         print("cookie=secret stderr", file=sys.stderr)
         if socket_timeout:

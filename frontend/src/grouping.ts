@@ -1,4 +1,4 @@
-import type { Task } from "./types";
+import type { KnownEntries, Task } from "./types";
 
 export type TaskSection =
   | { kind: "task"; task: Task }
@@ -45,4 +45,25 @@ export function groupSummary(tasks: Task[]) {
     progress: tasks.reduce((sum, task) => sum + task.progress, 0) / Math.max(1, tasks.length),
     latest: tasks.reduce((latest, task) => (task.created_at > latest ? task.created_at : latest), ""),
   };
+}
+
+/**
+ * The link to re-read when checking a collection for new videos. The recorded list link is
+ * preferred (favourites and series cannot be found from a member video); older tasks fall back
+ * to a member video, which the server expands to its whole collection, video or season.
+ */
+export function collectionSource(members: Task[]): string | undefined {
+  const recorded = [...members]
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+    .find((task) => task.source_url);
+  return recorded?.source_url || members[0]?.url || undefined;
+}
+
+// Any listed task blocks re-queuing the same video on the server, so all of them count as known.
+export function knownEntries(tasks: Task[]): KnownEntries {
+  const known: KnownEntries = {};
+  for (const task of tasks)
+    if (known[task.url] !== "downloaded")
+      known[task.url] = task.status === "completed" ? "downloaded" : "queued";
+  return known;
 }

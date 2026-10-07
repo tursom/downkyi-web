@@ -6,7 +6,9 @@ import re
 from . import media as m
 
 
-def discover_media(url, cookie_path=None, *, on_progress=None):
+def discover_media(url, cookie_path=None, *, whole=False, on_progress=None):
+    """whole=True lists the entire video or season even for a ?p= part or an episode link;
+    collection update checks start from any task in the collection."""
     entries, seen = [], set()
     truncated = False
     logger = m._Logger()
@@ -23,6 +25,8 @@ def discover_media(url, cookie_path=None, *, on_progress=None):
         on_progress({"stage": "resolving", "completed": 0, "total": None,
                      "succeeded": 0, "failed": 0, "title": ""})
     url = m._resolve_url(m.canonical_url(url))
+    if whole and "/video/" in urlsplit(url).path:
+        url = urlsplit(url)._replace(query="").geturl()
     with m._make_ydl(m._base_options(cookie_path, logger)) as ydl:
         def api(path, **query):
             from yt_dlp.networking import Request
@@ -189,7 +193,7 @@ def discover_media(url, cookie_path=None, *, on_progress=None):
                                                 else {"season_id": identity[2:]}))
             title, thumbnail = data.get("title"), data.get("cover")
             episodes = data.get("episodes") or []
-            if identity.startswith("ep"):
+            if identity.startswith("ep") and not whole:
                 episodes = [ep for ep in episodes if str(ep.get("id")) == identity[2:]]
             for ep in episodes:
                 append(f"https://www.bilibili.com/bangumi/play/ep{ep['id']}",

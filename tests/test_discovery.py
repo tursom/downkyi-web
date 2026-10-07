@@ -306,3 +306,54 @@ raise SystemExit(media.main())
         pending(result)
         assert events[-1]['total'] == events[-1]['succeeded'] == 2
     asyncio.run(check())
+
+
+def test_whole_discovery_lists_entire_video_season_and_collection(monkeypatch):
+    install(monkeypatch, lambda path, query: {'code': 0, 'data': view_data()})
+    assert len(discover_media(BASE + '?p=2', whole=True)['entries']) == 2
+    install(monkeypatch, lambda path, query: {'code': 0, 'result': {'title': 'Season',
+        'episodes': [{'id': 1, 'title': 'One', 'duration': 10000}, {'id': 2, 'title': 'Two', 'duration': 20000}]}})
+    assert [e['url'] for e in discover_media('ep2', whole=True)['entries']] == [
+        'https://www.bilibili.com/bangumi/play/ep1', 'https://www.bilibili.com/bangumi/play/ep2']
+
+    def collection(path, query):
+        if path.endswith('view'):
+            return {'code': 0, 'data': view_data(2, ugc_season={'id': 456, 'mid': 123})}
+        return {'code': 0, 'data': {'meta': {'name': 'Collection'}, 'page': {'total': 2},
+                                  'archives': [{'bvid': BASE.rsplit('/', 1)[1]}, {'bvid': BV2}]}}
+    install(monkeypatch, collection)
+    result = discover_media(BASE + '?p=2', whole=True)
+    assert len(result['entries']) == 4 and {e['group'] for e in result['entries']} == {'Collection'}
+
+
+class WholeMedia(TwoPhaseMedia):
+    def __init__(self):
+        super().__init__()
+        self.whole = []
+
+    async def discover(self, url, cookie, *, whole=False, on_progress=None):
+        self.whole.append(whole)
+        return await super().discover(url, cookie, on_progress=on_progress)
+
+
+def test_discover_records_source_url_for_tasks_and_passes_whole(tmp_path):
+    source = WholeMedia()
+    app = create_app(config_at(tmp_path), media=source, account=FakeAccount(), worker_module='tests.fake_worker')
+    with TestClient(app) as client:
+        login(client)
+        parsed = client.post('/api/discover', json={'url': BASE + '?p=2', 'whole': True}).json()
+        assert source.whole == [True]
+        assert parsed['source_url'] == BASE + '?p=2'
+        assert client.post('/api/discover', json={'url': BASE, 'whole': 'yes'}).status_code == 422
+        resolved = client.post(f"/api/parse/{parsed['id']}/resolve", json={'entry_ids': ['2', '3']}).json()
+        assert resolved['source_url'] == BASE + '?p=2'
+        created = client.post('/api/tasks', json={'parse_id': resolved['id'], 'entry_ids': ['2']}).json()['tasks'][0]
+        assert created['source_url'] == BASE + '?p=2' and created['group'] == 'Collection'
+        # An update check keeps new videos in the user's existing group after a rename upstream.
+        assert client.post('/api/tasks', json={'parse_id': resolved['id'], 'entry_ids': ['3'],
+                                               'group': 'x' * 501}).status_code == 422
+        renamed = client.post('/api/tasks', json={'parse_id': resolved['id'], 'entry_ids': ['3'],
+                                                  'group': 'Old name'}).json()['tasks'][0]
+        assert renamed['group'] == 'Old name'
+        client.post('/api/discover', json={'url': BASE})
+        assert source.whole == [True, False]

@@ -29,7 +29,7 @@ PUBLIC_FIELDS = {
 
 def public_task(task):
     return {**{key: task[key] for key in PUBLIC_FIELDS}, "danmaku": task.get("danmaku", False),
-            "group": task.get("group", "")}
+            "group": task.get("group", ""), "source_url": task.get("source_url", "")}
 
 
 def private_json(path, payload):
@@ -145,7 +145,9 @@ class DownloadManager:
                 created.append({
                     "id": uuid.uuid4().hex, "url": entry["url"], "title": entry["title"],
                     # Collection, multi-part video or season name; "" for a standalone video.
-                    "group": entry.get("group") or "",
+                    "group": request.group if request.group is not None else entry.get("group") or "",
+                    # The list link this task was queued from; collection update checks re-read it.
+                    "source_url": parsed.get("source_url") or "",
                     "thumbnail": entry.get("thumbnail") or parsed.get("thumbnail", ""),
                     "status": "queued", "progress": 0, "downloaded_bytes": 0,
                     "total_bytes": None, "speed": None, "eta": None, "error": None,

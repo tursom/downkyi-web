@@ -35,6 +35,8 @@ export interface Task {
   download_dir?: string;
   /** Collection, multi-part video or season the task was queued from; "" when standalone. */
   group?: string;
+  /** The list link the task was queued from; "" for tasks created before it was recorded. */
+  source_url?: string;
 }
 export interface ParsedEntry {
   resolution?: "pending" | "ready" | "failed";
@@ -65,6 +67,14 @@ export interface ParseResult {
   entries: ParsedEntry[];
   truncated: boolean;
   warnings: string[];
+  source_url?: string;
+}
+/** Videos of a collection that already have a task, keyed by entry URL. */
+export type KnownEntries = Record<string, "downloaded" | "queued">;
+export interface CollectionUpdate {
+  group: string;
+  url: string;
+  known: KnownEntries;
 }
 export interface DownloadOptions {
   quality: Quality;

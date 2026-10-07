@@ -13,11 +13,12 @@ import { api, errorMessage, isAbort, SESSION_EXPIRED } from "./api";
 import { useQuery } from "./hooks";
 import { ErrorNotice, IconButton, Modal, Spinner } from "./components";
 import Login, { Brand } from "./Login";
+import { knownEntries } from "./grouping";
 import ParseModal from "./ParseModal";
 import Settings from "./Settings";
 import System from "./System";
 import Tasks from "./Tasks";
-import type { SystemInfo, Task } from "./types";
+import type { CollectionUpdate, SystemInfo, Task } from "./types";
 
 type View = "tasks" | "library" | "settings" | "system";
 const navigation = [
@@ -28,7 +29,8 @@ const navigation = [
 ] as const;
 function Workspace({ onLogout, authRequired }: { onLogout: () => void; authRequired: boolean }) {
   const [view, setView] = useState<View>("tasks");
-  const [parseOpen, setParseOpen] = useState(false);
+  // undefined: closed; {}: new download; { update }: check a collection for new videos.
+  const [parseRequest, setParseRequest] = useState<{ update?: CollectionUpdate }>();
   const [drawer, setDrawer] = useState(false);
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -133,7 +135,16 @@ function Workspace({ onLogout, authRequired }: { onLogout: () => void; authRequi
               loading={listing.loading}
               error={listing.error}
               refresh={refresh}
-              onNew={() => setParseOpen(true)}
+              onNew={() => setParseRequest({})}
+              onCheckUpdates={(group, url) =>
+                setParseRequest({
+                  update: {
+                    group,
+                    url,
+                    known: knownEntries([...(tasks.data?.tasks ?? []), ...(library.data?.tasks ?? [])]),
+                  },
+                })
+              }
               onBrowse={() =>
                 navigate(view === "library" ? "tasks" : "library")
               }
@@ -166,12 +177,13 @@ function Workspace({ onLogout, authRequired }: { onLogout: () => void; authRequi
           {nav}
         </Modal>
       )}
-      {parseOpen && (
+      {parseRequest && (
         <ParseModal
           downloadDir={system.data?.download_dir}
-          onClose={() => setParseOpen(false)}
+          update={parseRequest.update}
+          onClose={() => setParseRequest(undefined)}
           onCreated={(count) => {
-            setParseOpen(false);
+            setParseRequest(undefined);
             navigate("tasks");
             setMessage(`已创建 ${count} 个下载任务`);
             refresh();

@@ -705,3 +705,18 @@
     gap: 9px;
   }
 }
+.update-summary {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: #f1f4f5;
+  color: #536b72;
+  font-size: 12px;
+}
+.update-summary.found {
+  background: #e7f3ee;
+  color: #1f6b58;
+}
+.entry-choice.known {
+  opacity: 0.6;
+}

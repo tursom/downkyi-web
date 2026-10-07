@@ -838,6 +838,19 @@ main {
 .group-status .failed {
   color: #a94960;
 }
+.group-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--accent-dark);
+  white-space: nowrap;
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+.group-update:hover {
+  background: #e7f3ee;
+}
 .group-view {
   display: flex;
   align-items: center;

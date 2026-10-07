@@ -48,6 +48,11 @@ class ParseInput(InputModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class DiscoverInput(ParseInput):
+    # List the whole video/season behind a part or episode link (collection update checks).
+    whole: bool = Field(default=False, strict=True)
+
+
 class RetryParseInput(InputModel):
     entry_ids: list[str] = Field(min_length=1, max_length=100)
 
@@ -65,6 +70,8 @@ class NewTasks(InputModel):
     subtitles: bool = False
     cover: bool = True
     danmaku: bool = False
+    # Update checks keep new videos in the existing group even if B 站 renamed the collection.
+    group: str | None = Field(default=None, max_length=500)
 
 
 class SettingsInput(InputModel):
@@ -275,6 +282,19 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
                 raise parse_error(error) from None
             raise
 
+    def with_source(url, operation):
+        # Remember the link a list came from so its tasks can later check the collection for updates.
+        from .media import canonical_url
+        try:
+            source = canonical_url(url)
+        except ValueError:
+            source = ""
+
+        async def run(cookie, progress):
+            result = await operation(cookie, progress)
+            return {**result, "source_url": source} if isinstance(result, dict) else result
+        return run
+
     @api.post("/parse")
     async def parse(body: ParseInput, request: Request):
         from .media import MediaService, canonical_url
@@ -283,15 +303,17 @@ def create_app(config=None, *, account=None, media=None, worker_module="backend.
         # adapters retain their historical input contract.
         if wants_progress(request) or isinstance(app.state.media, MediaService):
             canonical_url(body.url)
-        return await run_parse(request, lambda cookie, progress:
-                               invoke(app.state.media.parse, body.url, cookie, progress))
+        return await run_parse(request, with_source(body.url, lambda cookie, progress:
+                               invoke(app.state.media.parse, body.url, cookie, progress)))
 
     @api.post("/discover")
-    async def discover(body: ParseInput, request: Request):
+    async def discover(body: DiscoverInput, request: Request):
+        from functools import partial
         from .media import canonical_url
         canonical_url(body.url)
-        return await run_parse(request, lambda cookie, progress:
-                               invoke(app.state.media.discover, body.url, cookie, progress))
+        method = partial(app.state.media.discover, whole=True) if body.whole else app.state.media.discover
+        return await run_parse(request, with_source(body.url, lambda cookie, progress:
+                               invoke(method, body.url, cookie, progress)))
 
     @api.post("/parse/{parse_id}/resolve")
     async def resolve_parse(parse_id: str, body: ResolveParseInput, request: Request):

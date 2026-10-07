@@ -654,8 +654,8 @@ class MediaService:
         """on_progress, when supplied, is awaited with each progress dictionary."""
         return await self._extract("parse", {"url": canonical_url(url)}, cookie_path, on_progress)
 
-    async def discover(self, url: str, cookie_path: Path | None = None, *, on_progress=None) -> dict:
-        return await self._extract("discover", {"url": canonical_url(url)}, cookie_path, on_progress)
+    async def discover(self, url: str, cookie_path: Path | None = None, *, whole=False, on_progress=None) -> dict:
+        return await self._extract("discover", {"url": canonical_url(url), "whole": whole is True}, cookie_path, on_progress)
 
     async def retry(self, urls: list[str], cookie_path: Path | None = None, *, on_progress=None) -> dict:
         """on_progress follows the same asynchronous contract as parse."""
@@ -949,7 +949,8 @@ def main(argv=None) -> int:
                                         if payload.get("progress") is True else {})
                     if args[0] == "discover":
                         from .discovery import discover_media
-                        result = discover_media(payload.get("url", ""), payload.get("cookie_path"), **progress_options)
+                        result = discover_media(payload.get("url", ""), payload.get("cookie_path"),
+                                                whole=payload.get("whole") is True, **progress_options)
                     elif args[0] == "retry":
                         result = retry_media(payload.get("urls"), payload.get("cookie_path"), **progress_options)
                     else:

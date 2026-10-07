@@ -37,7 +37,7 @@ import TaskDetail, {
   statuses,
   type DeleteRequest,
 } from "./TaskDetail";
-import { groupSummary, groupTasks } from "./grouping";
+import { collectionSource, groupSummary, groupTasks } from "./grouping";
 import type { Task, TaskStatus } from "./types";
 // ArtPlayer is only needed after the user chooses to play something.
 const Player = lazy(() => import("./Player"));
@@ -80,6 +80,7 @@ export default function Tasks({
   refresh,
   onNew,
   onBrowse,
+  onCheckUpdates,
   message,
   library = false,
   downloadDir,
@@ -90,6 +91,8 @@ export default function Tasks({
   refresh: () => void;
   onNew: () => void;
   onBrowse: () => void;
+  /** Re-read a collection's list to find and queue videos added since. */
+  onCheckUpdates?: (group: string, url: string) => void;
   message: string;
   library?: boolean;
   downloadDir?: string;
@@ -312,6 +315,7 @@ export default function Tasks({
     const summary = groupSummary(members);
     const chosen = members.filter((task) => selected.includes(task.id)).length;
     const value = percent(summary.progress);
+    const source = collectionSource(members);
     return (
       <Fragment key={`group:${name}`}>
         <tr className="group-row">
@@ -372,7 +376,19 @@ export default function Tasks({
             </div>
           </td>
           <td className="time-cell">{dateTime(summary.latest)}</td>
-          <td />
+          <td>
+            {onCheckUpdates && source && (
+              <button
+                className="group-update"
+                title={`检查「${name}」是否有新视频`}
+                aria-label={`检查更新：${name}`}
+                onClick={() => onCheckUpdates(name, source)}
+              >
+                <RefreshCw size={13} />
+                检查更新
+              </button>
+            )}
+          </td>
         </tr>
         {open && members.map((task) => renderRow(task, true))}
       </Fragment>

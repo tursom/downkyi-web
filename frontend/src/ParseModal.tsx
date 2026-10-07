@@ -15,20 +15,23 @@ import { ErrorNotice, Modal, Spinner, Thumbnail } from "./components";
 import EntryPicker, { eligible } from "./EntryPicker";
 import DownloadSpecs, { availableSpecs } from "./DownloadSpecs";
 import DownloadReview from "./DownloadReview";
-import type { DownloadOptions, ParseProgress, ParseResult, Task } from "./types";
+import type { CollectionUpdate, DownloadOptions, ParseProgress, ParseResult, Task } from "./types";
 const RESOLVE_BATCH_SIZE = 50;
 const steps = ["解析内容", "选择项目与规格", "确认入队"];
 export default function ParseModal({
   onClose,
   onCreated,
   downloadDir,
+  update,
 }: {
   onClose: () => void;
   onCreated: (count: number) => void;
   downloadDir?: string;
+  /** Re-read a collection's list and offer only the videos that have no task yet. */
+  update?: CollectionUpdate;
 }) {
   const [step, setStep] = useState(1);
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(update?.url ?? "");
   const [parsed, setParsed] = useState<ParseResult>();
   const [selected, setSelected] = useState<string[]>([]);
   const [listingSelection, setListingSelection] = useState<string[]>([]);
@@ -63,6 +66,10 @@ export default function ParseModal({
     },
     [],
   );
+  // Update checks start reading on open; parse() ignores repeats while a request is running.
+  useEffect(() => {
+    if (update) void parse();
+  }, []);
   useEffect(() => {
     heading.current?.focus();
     heading.current?.closest(".dialog")?.scrollTo?.(0, 0);
@@ -101,8 +108,12 @@ export default function ParseModal({
       if (!request.signal.aborted && controller.current === request) setProgress(next);
     };
   }
-  async function parse(event: FormEvent) {
-    event.preventDefault();
+  // Only the collection's own link gets update treatment; a replaced link is a normal download.
+  const checking = update && url.trim() === update.url ? update : undefined;
+  const known = checking?.known ?? {};
+  const fresh = parsed?.entries.filter((entry) => !known[entry.url]) ?? [];
+  async function parse(event?: FormEvent) {
+    event?.preventDefault();
     if (!url.trim() || busy || controller.current) return;
     const request = new AbortController();
     controller.current = request;
@@ -112,16 +123,19 @@ export default function ParseModal({
     try {
       const result = await parseStream("/discover", {
         method: "POST",
-        body: { url: url.trim() },
+        body: { url: url.trim(), ...(checking && { whole: true }) },
         signal: request.signal,
       }, beginProgress(request));
       if (request.signal.aborted || controller.current !== request) return;
       setParsed(result);
       setSelected([]);
       setScope([]);
-      setListingSelection(result.entries.length === 1 ? [result.entries[0].id] : []);
+      const unknown = result.entries.filter((entry) => !checking?.known[entry.url]);
+      // Update checks preselect every new video; a single-item link is resolved immediately.
+      setListingSelection(checking ? unknown.map((entry) => entry.id)
+        : result.entries.length === 1 ? [result.entries[0].id] : []);
       setOptions((previous) => ({ ...previous, mode: "video", quality: "best", codec: "auto" }));
-      if (result.entries.length === 1) {
+      if (result.entries.length === 1 && unknown.length === 1) {
         controller.current = null;
         await resolveEntries(result, [result.entries[0].id], true);
       }
@@ -267,6 +281,7 @@ export default function ParseModal({
           parse_id: parsed.id,
           entry_ids: chosen.map((entry) => entry.id),
           ...options,
+          ...(checking && { group: checking.group }),
         },
       });
       if (!request.signal.aborted) onCreated(result.tasks.length);
@@ -281,7 +296,7 @@ export default function ParseModal({
     }
   }
   return (
-    <Modal title="新建下载" onClose={close} wide busy={busy === "create"}>
+    <Modal title={update ? "检查合集更新" : "新建下载"} onClose={close} wide busy={busy === "create"}>
       <ol className="workflow-steps" aria-label="下载步骤">
         {steps.map((label, index) => (
           <li
@@ -333,11 +348,20 @@ export default function ParseModal({
           <p>先选择项目，再解析画质和资源。</p>
           {parsed && <>
             <div className="picker-heading"><h3>{parsed.title}</h3><button className="text-link" onClick={changeLink}>更换链接</button></div>
+            {checking && (
+              <p role="status" className={`update-summary${fresh.length ? " found" : ""}`}>
+                {fresh.length
+                  ? `发现 ${fresh.length} 个新视频，已默认选中；其余 ${parsed.entries.length - fresh.length} 个已下载或在队列中。`
+                  : `暂无更新：${parsed.entries.length} 个视频都已下载或在队列中。`}
+                {parsed.title !== checking.group &&
+                  ` B 站上的名称现为「${parsed.title}」，新视频仍归入「${checking.group}」。`}
+              </p>
+            )}
             {parsed.truncated && <p role="status">列表已截断，仅显示接口返回的 {parsed.entries.length} 项。</p>}
             {parsed.warnings.length > 0 && <div className="workflow-warnings" role="status">
               {parsed.warnings.map((warning, index) => <p key={index}>{warning}</p>)}
             </div>}
-            <DiscoveryPicker entries={parsed.entries} selected={listingSelection} setSelected={setListingSelection} disabled={!!busy} />
+            <DiscoveryPicker entries={parsed.entries} selected={listingSelection} setSelected={setListingSelection} disabled={!!busy} known={known} />
           </>}
           {(busy || !parsed) && <div className="source-placeholder" ref={progressArea}>
             {busy === "parse" || busy === "resolve" ? (

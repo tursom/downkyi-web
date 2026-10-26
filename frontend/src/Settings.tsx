@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  Download,
+  ChevronDown,
+  ChevronRight,
   FileUp,
+  HardDrive,
   Minus,
   Plus,
   QrCode,
   RefreshCw,
   Save,
-  ShieldCheck,
   Trash2,
 } from "lucide-react";
 import { api, errorMessage } from "./api";
+import { bytes, percent } from "./format";
 import {
   ErrorNotice,
   IconButton,
@@ -20,12 +22,33 @@ import {
 } from "./components";
 import { useQuery } from "./hooks";
 import QrLogin from "./QrLogin";
-import type { Account, Settings as SettingsData } from "./types";
+import { applyTheme, loadTheme, type Theme } from "./theme";
+import type { Account, Settings as SettingsData, SystemInfo } from "./types";
 export const COOKIE_MAX_BYTES = 128 * 1024;
-export default function Settings({ onSaved }: { onSaved?: () => void }) {
+const themes: [Theme, string][] = [
+  ["system", "跟随系统"],
+  ["light", "浅色"],
+  ["dark", "深色"],
+];
+type SystemQuery = {
+  data?: SystemInfo;
+  error: string;
+  loading: boolean;
+  updatedAt?: Date;
+  refresh: () => void;
+};
+export default function Settings({
+  onSaved,
+  system,
+}: {
+  onSaved?: () => void;
+  /** Server status, shown read-only at the end of the page. */
+  system?: SystemQuery;
+}) {
   const query = useQuery<SettingsData>("/settings");
   const account = useQuery<Account>("/bilibili/account");
-  const [tab, setTab] = useState<"download" | "account">("download");
+  const [cookieForm, setCookieForm] = useState(false);
+  const [theme, setTheme] = useState(loadTheme);
   const [savedSettings, setSavedSettings] = useState<SettingsData>();
   const [concurrencyDraft, setConcurrency] = useState<number>();
   const [downloadDirDraft, setDownloadDir] = useState<string>();
@@ -129,51 +152,34 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
     void mutate("import");
   }
   const locked = !!busy || !query.data || query.loading;
+  const server = system?.data;
+  const usedPercent =
+    server && server.disk_total > 0
+      ? percent((1 - server.disk_free / server.disk_total) * 100)
+      : 0;
   return (
     <>
       <header className="page-heading">
-        <div>
-          <div className="eyebrow">PREFERENCES</div>
-          <h1>偏好设置</h1>
-        </div>
-        <ShieldCheck size={22} />
+        <h1>设置</h1>
       </header>
       <ErrorNotice message={query.error} retry={query.refresh} />
       {!confirmClear && <ErrorNotice message={error} />}
       <SuccessNotice message={success} />
-      {query.loading && !query.data ? (
-        <Spinner label="正在加载设置" />
-      ) : (
-        query.data && (
-          <section className="settings-layout">
-            <nav className="settings-nav" aria-label="设置分类">
-              <button
-                aria-pressed={tab === "download"}
-                className={tab === "download" ? "active" : ""}
-                onClick={() => setTab("download")}
-              >
-                <Download size={16} />
-                下载设置
-              </button>
-              <button
-                aria-pressed={tab === "account"}
-                className={tab === "account" ? "active" : ""}
-                onClick={() => setTab("account")}
-              >
-                <ShieldCheck size={16} />
-                哔哩哔哩账户
-              </button>
-            </nav>
-            <div className="settings-content">
-              {tab === "download" ? (
+      <div className="settings-page">
+        {query.loading && !query.data ? (
+          <Spinner label="正在加载设置" />
+        ) : (
+          query.data && (
+            <>
+              <section className="panel" aria-labelledby="settings-download">
                 <form
                   onSubmit={(event) => {
                     event.preventDefault();
                     void mutate("save");
                   }}
                 >
-                  <div className="settings-heading">
-                    <h2>下载设置</h2>
+                  <div className="panel-heading">
+                    <h2 id="settings-download">下载</h2>
                     <IconButton
                       label="刷新下载设置"
                       onClick={query.refresh}
@@ -183,7 +189,10 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                     </IconButton>
                   </div>
                   <div className="setting-row">
-                    <strong>同时下载任务数</strong>
+                    <div>
+                      <strong>同时下载任务数</strong>
+                      <span>同时进行的下载数量，最多 4 个。</span>
+                    </div>
                     <div className="stepper">
                       <IconButton
                         label="减少并发"
@@ -206,36 +215,35 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                       </IconButton>
                     </div>
                   </div>
-                  <label className="field-label" htmlFor="download-dir">
-                    下载目录
-                  </label>
-                  <input
-                    id="download-dir"
-                    className="download-dir-input"
-                    type="text"
-                    value={downloadDir}
-                    onChange={(event) => {
-                      setDownloadDir(event.target.value);
-                      setSuccess("");
-                    }}
-                    aria-describedby="download-dir-hint download-dir-default"
-                    placeholder="例如 /downloads 或 /downloads/archive"
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    disabled={locked}
-                  />
-                  <p id="download-dir-hint" className="download-dir-hint muted">
-                    服务器或容器内已存在、可写的绝对路径，不会自动创建文件夹。仅影响新任务，已有任务目录不变。
-                  </p>
-                  <p
-                    id="download-dir-default"
-                    className="download-dir-hint muted"
-                  >
-                    环境初始目录：
-                    <code>{settings?.default_download_dir || "未提供"}</code>
-                  </p>
-                  <div className="settings-save">
+                  <div className="setting-field">
+                    <label className="field-label" htmlFor="download-dir">
+                      下载目录
+                    </label>
+                    <input
+                      id="download-dir"
+                      className="text-input mono"
+                      type="text"
+                      value={downloadDir}
+                      onChange={(event) => {
+                        setDownloadDir(event.target.value);
+                        setSuccess("");
+                      }}
+                      aria-describedby="download-dir-hint download-dir-default"
+                      placeholder="例如 /downloads 或 /downloads/archive"
+                      autoComplete="off"
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      disabled={locked}
+                    />
+                    <p id="download-dir-hint" className="hint">
+                      服务器或容器内已存在、可写的绝对路径，不会自动创建文件夹。仅影响新任务，已有任务目录不变。
+                    </p>
+                    <p id="download-dir-default" className="hint">
+                      环境初始目录：
+                      <code>{settings?.default_download_dir || "未提供"}</code>
+                    </p>
+                  </div>
+                  <div className="panel-actions">
                     <button
                       className="button primary"
                       type="submit"
@@ -254,64 +262,84 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                     </button>
                   </div>
                 </form>
-              ) : (
-                <>
-                  <h2>哔哩哔哩账户</h2>
-                  <div className="setting-row">
-                    <strong>登录凭据</strong>
-                    <span
-                      className={`badge ${query.data.cookie_configured ? "completed" : "paused"}`}
-                    >
-                      {query.data.cookie_configured ? "已配置" : "未配置"}
-                    </span>
+              </section>
+              <section className="panel" aria-labelledby="settings-account">
+                <div className="panel-heading">
+                  <h2 id="settings-account">哔哩哔哩账户</h2>
+                  <IconButton
+                    label="刷新账户状态"
+                    onClick={account.refresh}
+                    disabled={account.loading}
+                  >
+                    <RefreshCw size={16} />
+                  </IconButton>
+                </div>
+                <ErrorNotice message={account.error} retry={account.refresh} />
+                <div className="account-row">
+                  <span className="avatar" aria-hidden="true">
+                    {account.data?.logged_in
+                      ? (account.data.username || "B").slice(0, 1).toUpperCase()
+                      : "?"}
+                  </span>
+                  <div>
+                    {account.loading && !account.data ? (
+                      <Spinner label="正在读取账户" />
+                    ) : account.data ? (
+                      <>
+                        <strong>
+                          {account.data.logged_in
+                            ? account.data.username || "已登录账户"
+                            : "未登录哔哩哔哩"}
+                        </strong>
+                        <span>
+                          {account.data.logged_in
+                            ? account.data.vip
+                              ? "大会员"
+                              : "普通账户"
+                            : account.data.message || "尚未授权"}
+                          {" · 登录凭据"}
+                          {query.data.cookie_configured ? "已配置" : "未配置"}
+                          {account.error ? " · 数据未更新" : ""}
+                        </span>
+                      </>
+                    ) : (
+                      <strong>账户状态未知</strong>
+                    )}
                   </div>
-                  <ErrorNotice
-                    message={account.error}
-                    retry={account.refresh}
-                  />
-                  <div className="setting-row">
-                    <div>
-                      {account.loading && !account.data ? (
-                        <Spinner label="正在读取账户" />
-                      ) : account.data ? (
-                        <>
-                          <strong>
-                            {account.data.logged_in
-                              ? account.data.username || "已登录账户"
-                              : "未登录哔哩哔哩"}
-                          </strong>
-                          <span>
-                            {account.data.logged_in
-                              ? account.data.vip
-                                ? "大会员"
-                                : "普通账户"
-                              : account.data.message || "尚未授权"}
-                            {account.error ? " · 数据未更新" : ""}
-                          </span>
-                        </>
-                      ) : (
-                        <strong>账户状态未知</strong>
-                      )}
-                    </div>
-                    <IconButton
-                      label="刷新账户状态"
-                      onClick={account.refresh}
-                      disabled={account.loading}
-                    >
-                      <RefreshCw size={16} />
-                    </IconButton>
-                  </div>
-                  <div className="cookie-buttons">
-                    <button
-                      className="button secondary"
-                      disabled={locked}
-                      onClick={() => setQr(true)}
-                    >
-                      <QrCode size={17} />
-                      扫码登录
-                    </button>
-                  </div>
-                  <form onSubmit={submitCookies}>
+                </div>
+                <div className="panel-actions">
+                  <button
+                    type="button"
+                    className="button danger"
+                    disabled={locked || !query.data.cookie_configured}
+                    onClick={() => {
+                      setError("");
+                      setConfirmClear(true);
+                    }}
+                  >
+                    <Trash2 size={16} />
+                    清除 Cookie
+                  </button>
+                  <button
+                    className="button primary"
+                    disabled={locked}
+                    onClick={() => setQr(true)}
+                  >
+                    <QrCode size={17} />
+                    扫码登录
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="disclosure"
+                  aria-expanded={cookieForm}
+                  onClick={() => setCookieForm((open) => !open)}
+                >
+                  {cookieForm ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                  手动导入 Cookie
+                </button>
+                {cookieForm && (
+                  <form onSubmit={submitCookies} className="cookie-form">
                     <label className="field-label" htmlFor="cookies">
                       Netscape Cookie 文本
                     </label>
@@ -320,12 +348,12 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                       value={cookies}
                       onChange={(event) => setCookies(event.target.value)}
                       placeholder="# Netscape HTTP Cookie File"
-                      rows={7}
+                      rows={6}
                       spellCheck={false}
                       autoComplete="off"
                       disabled={locked}
                     />
-                    <div className="cookie-buttons">
+                    <div className="panel-actions">
                       <input
                         ref={input}
                         className="sr-only"
@@ -349,18 +377,6 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                         选择文件
                       </button>
                       <button
-                        type="button"
-                        className="button danger"
-                        disabled={locked || !query.data.cookie_configured}
-                        onClick={() => {
-                          setError("");
-                          setConfirmClear(true);
-                        }}
-                      >
-                        <Trash2 size={16} />
-                        清除 Cookie
-                      </button>
-                      <button
                         className="button primary"
                         disabled={locked || !cookies.trim()}
                       >
@@ -375,12 +391,111 @@ export default function Settings({ onSaved }: { onSaved?: () => void }) {
                       </button>
                     </div>
                   </form>
-                </>
-              )}
+                )}
+              </section>
+            </>
+          )
+        )}
+        <section className="panel" aria-labelledby="settings-appearance">
+          <div className="setting-row compact">
+            <div>
+              <h2 id="settings-appearance">外观</h2>
+              <span>只影响当前浏览器。</span>
             </div>
+            <div className="segmented-view labelled" role="group" aria-label="颜色主题">
+              {themes.map(([value, label]) => (
+                <button
+                  key={value}
+                  aria-pressed={theme === value}
+                  className={theme === value ? "active" : ""}
+                  onClick={() => {
+                    setTheme(value);
+                    applyTheme(value);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+        {system && (
+          <section className="panel" aria-labelledby="settings-server">
+            <div className="panel-heading">
+              <h2 id="settings-server">服务器</h2>
+              <IconButton
+                label="刷新系统状态"
+                onClick={system.refresh}
+                disabled={system.loading}
+              >
+                <RefreshCw size={16} className={system.loading ? "spin" : ""} />
+              </IconButton>
+            </div>
+            <ErrorNotice message={system.error} retry={system.refresh} />
+            {system.loading && !server ? (
+              <Spinner label="正在读取系统信息" />
+            ) : (
+              server && (
+                <>
+                  <div className="disk-meter">
+                    <div className="disk-caption">
+                      <span>
+                        <HardDrive size={15} />
+                        下载目录所在磁盘
+                      </span>
+                      <span>
+                        <strong>{bytes(server.disk_free)}</strong> 可用 / {bytes(server.disk_total)}
+                      </span>
+                    </div>
+                    <div
+                      className="meter-track"
+                      role="progressbar"
+                      aria-label="磁盘使用率"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={usedPercent}
+                    >
+                      <i style={{ width: `${usedPercent}%` }} />
+                    </div>
+                  </div>
+                  <dl className="info-list">
+                    <div>
+                      <dt>应用版本</dt>
+                      <dd>{server.version || "未知版本"}</dd>
+                    </div>
+                    <div>
+                      <dt>下载引擎 yt-dlp</dt>
+                      <dd>{server.yt_dlp_version || "未知版本"}</dd>
+                    </div>
+                    <div>
+                      <dt>媒体处理 FFmpeg</dt>
+                      <dd className={server.ffmpeg ? "ok" : "bad"}>
+                        {server.ffmpeg ? "可用" : "未安装 / 不可用"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>当前下载目录</dt>
+                      <dd>
+                        <code>{server.download_dir}</code>
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>活跃任务</dt>
+                      <dd>{server.active_tasks}</dd>
+                    </div>
+                  </dl>
+                  {system.updatedAt && (
+                    <p className="hint">
+                      {system.error ? "数据未更新 · " : ""}最近更新{" "}
+                      {system.updatedAt.toLocaleTimeString("zh-CN", { hour12: false })}
+                    </p>
+                  )}
+                </>
+              )
+            )}
           </section>
-        )
-      )}
+        )}
+      </div>
       {confirmClear && (
         <Modal
           title="清除 B站 Cookie？"

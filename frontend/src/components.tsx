@@ -114,6 +114,7 @@ export function Modal({
   onClose,
   busy = false,
   wide = false,
+  side = false,
   className = "",
   onEscape,
 }: {
@@ -122,6 +123,8 @@ export function Modal({
   onClose: () => void;
   busy?: boolean;
   wide?: boolean;
+  /** Slides in from the right edge (a bottom sheet on phones) instead of centring. */
+  side?: boolean;
   className?: string;
   /** Lets content consume Escape first (for example, leaving web fullscreen); return true when handled. */
   onEscape?: () => boolean;
@@ -207,13 +210,13 @@ export function Modal({
   }, []);
   return createPortal(
     <div
-      className={`overlay ${className === "nav-drawer" ? "drawer-overlay" : ""}`}
+      className={`overlay${side ? " side" : ""}`}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget && !busy) onClose();
       }}
     >
       <div
-        className={`dialog ${wide ? "workflow-dialog" : ""} ${className}`}
+        className={`dialog${wide ? " workflow-dialog" : ""}${side ? " side-sheet" : ""} ${className}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -221,10 +224,7 @@ export function Modal({
         tabIndex={-1}
       >
         <header className={wide ? "workflow-heading" : "dialog-heading"}>
-          <div>
-            {wide && <div className="eyebrow">NEW DOWNLOAD</div>}
-            <h2 id={titleId}>{title}</h2>
-          </div>
+          <h2 id={titleId}>{title}</h2>
           <IconButton label="关闭弹窗" onClick={onClose} disabled={busy}>
             <X size={20} />
           </IconButton>

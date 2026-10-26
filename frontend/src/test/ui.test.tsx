@@ -20,7 +20,6 @@ function tasksProps(tasks: Task[]) {
     error: "",
     refresh: vi.fn(),
     onNew: vi.fn(),
-    onBrowse: vi.fn(),
     message: "",
   };
 }
@@ -58,7 +57,7 @@ describe("authentication and shell", () => {
       "/api/login",
       expect.objectContaining({ body: '{"token":"test-token"}' }),
     );
-    await user.click(screen.getByRole("button", { name: /已完成 1/ }));
+    await user.click(screen.getByRole("button", { name: /^媒体库 1/ }));
     expect(await screen.findByText("记录已移除 · 文件保留")).toBeVisible();
     expect(fetch).toHaveBeenCalledWith("/api/library", expect.anything());
   });
@@ -90,18 +89,42 @@ describe("authentication and shell", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
-  it("contains drawer focus, closes on escape and restores focus", async () => {
+  it("keeps finished downloads in the library and shows server status under settings", async () => {
     const user = userEvent.setup();
-    vi.stubGlobal("fetch", workspaceFetch());
+    const finished = { ...task, id: "done", title: "已完成的视频", status: "completed" as const, progress: 100 };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/session") return respond({ authenticated: true });
+        if (url === "/api/tasks") return respond({ tasks: [task, finished] });
+        if (url === "/api/library") return respond({ tasks: [finished] });
+        if (url === "/api/system") return respond(system);
+        if (url === "/api/settings")
+          return respond({ concurrency: 2, cookie_configured: false, download_dir: "/downloads", default_download_dir: "/downloads" });
+        if (url === "/api/bilibili/account")
+          return respond({ logged_in: false, username: null, vip: false });
+        throw new Error(`Unexpected request ${url}`);
+      }),
+    );
     render(<App />);
-    const opener = await screen.findByRole("button", { name: "打开导航" });
+    expect(await screen.findByRole("button", { name: "测试视频" })).toBeVisible();
+    expect(screen.queryByText("已完成的视频")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^下载 1/ })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: /^媒体库 1/ }));
+    expect(await screen.findByRole("button", { name: "已完成的视频" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "设置" }));
+    const server = await screen.findByRole("region", { name: "服务器" });
+    expect(within(server).getByText("下载引擎 yt-dlp")).toBeVisible();
+    expect(within(server).getByRole("progressbar", { name: "磁盘使用率" })).toHaveAttribute("aria-valuenow", "50");
+  });
+  it("opens task details as a focus-contained side sheet and restores focus on escape", async () => {
+    const user = userEvent.setup();
+    render(<Tasks {...tasksProps([task])} />);
+    const opener = screen.getByRole("button", { name: "任务详情：测试视频" });
     await user.click(opener);
-    const dialog = screen.getByRole("dialog");
+    const dialog = screen.getByRole("dialog", { name: "任务详情" });
+    expect(dialog).toHaveClass("side-sheet");
     expect(dialog).toContainElement(document.activeElement as HTMLElement);
-    await user.tab({ shift: true });
-    expect(
-      within(dialog).getByRole("button", { name: "服务器" }),
-    ).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(opener).toHaveFocus();

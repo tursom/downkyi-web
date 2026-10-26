@@ -14,11 +14,9 @@ export function Brand() {
   return (
     <div className="brand">
       <div className="brand-symbol">
-        <ArrowDownToLine size={23} strokeWidth={2.5} />
+        <ArrowDownToLine size={17} strokeWidth={2.5} />
       </div>
-      <span>
-        DownKyi <small>WEB</small>
-      </span>
+      <span>DownKyi</span>
     </div>
   );
 }
@@ -69,8 +67,8 @@ export default function Login({
       <section className="login-panel">
         <Brand />
         <div className="login-heading">
-          <div className="eyebrow">SERVER ACCESS</div>
-          <h1>登录下载工作台</h1>
+          <h1>登录</h1>
+          <p className="muted">输入服务器的访问令牌</p>
         </div>
         {expired && (
           <div className="notice warning" role="status">

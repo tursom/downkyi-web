@@ -245,7 +245,7 @@ describe("workspace directory propagation", () => {
       vi.stubGlobal("fetch", fetch);
       render(<App />);
       await screen.findByText("/downloads");
-      await user.click(screen.getByRole("button", { name: "偏好设置" }));
+      await user.click(screen.getByRole("button", { name: "设置" }));
       await screen.findByLabelText("下载目录");
       changeDir("/export");
       const systemReads = () =>
@@ -254,7 +254,7 @@ describe("workspace directory propagation", () => {
       await user.click(saveButton());
       await screen.findByText("下载设置已保存");
       await waitFor(() => expect(systemReads()).toBeGreaterThan(before));
-      await user.click(screen.getByRole("button", { name: /下载队列 1/ }));
+      await user.click(screen.getByRole("button", { name: /^下载 1/ }));
       expect(await screen.findByText("/export")).toBeVisible();
       await user.click(
         screen.getByRole("button", { name: "任务详情：测试视频" }),

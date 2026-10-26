@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
@@ -38,7 +39,7 @@ describe("settings", () => {
       "/api/settings",
       expect.objectContaining({ method: "PATCH", body: '{"concurrency":4}' }),
     );
-    await user.click(screen.getByRole("button", { name: "哔哩哔哩账户" }));
+    await user.click(screen.getByRole("button", { name: "手动导入 Cookie" }));
     const cookieInput = screen.getByLabelText("Netscape Cookie 文本");
     await waitFor(() => expect(cookieInput).toBeEnabled());
     fireEvent.change(cookieInput, {
@@ -73,12 +74,39 @@ describe("settings", () => {
     );
     render(<Settings />);
     fireEvent.click(
-      await screen.findByRole("button", { name: "哔哩哔哩账户" }),
+      await screen.findByRole("button", { name: "手动导入 Cookie" }),
     );
     fireEvent.change(screen.getByLabelText("选择 Cookie 文件"), {
       target: { files: [new File(["x".repeat(131073)], "cookies.txt")] },
     });
     expect(await screen.findByRole("alert")).toHaveTextContent("128 KB");
+  });
+  it("switches the colour theme for this browser and can return to the system setting", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        respond(
+          url === "/api/settings"
+            ? { concurrency: 2, cookie_configured: false }
+            : { logged_in: false, username: null, vip: false },
+        ),
+      ),
+    );
+    render(<Settings />);
+    const themes = screen.getByRole("group", { name: "颜色主题" });
+    expect(
+      within(themes).getByRole("button", { name: "跟随系统" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(themes).getByRole("button", { name: "深色" }));
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("downkyi:theme")).toBe("dark");
+    expect(
+      within(themes).getByRole("button", { name: "深色" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(themes).getByRole("button", { name: "跟随系统" }));
+    expect(document.documentElement.dataset.theme).toBeUndefined();
+    expect(localStorage.getItem("downkyi:theme")).toBeNull();
   });
 });
 describe("QR lifecycle", () => {

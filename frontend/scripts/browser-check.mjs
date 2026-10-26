@@ -31,13 +31,17 @@ const states = [
 const errors = [];
 let checks = 0;
 try {
-  for (const viewport of [
+  for (const { colorScheme = "light", ...viewport } of [
     { width: 1440, height: 960 },
     { width: 768, height: 1024 },
     { width: 390, height: 844 },
     { width: 320, height: 740 },
+    // The whole flow again with the system in dark mode.
+    { width: 1440, height: 960, colorScheme: "dark" },
+    { width: 390, height: 844, colorScheme: "dark" },
   ]) {
-    const context = await browser.newContext({ viewport });
+    const context = await browser.newContext({ viewport, colorScheme, reducedMotion: "reduce" });
+    const shotPrefix = `${colorScheme === "dark" ? "dark-" : ""}${viewport.width}`;
     const page = await context.newPage();
     // Playwright route.fulfill buffers bodies. Wrap fixture JSON in a controlled browser
     // ReadableStream so the production reader sees separate real UTF-8/NDJSON chunks.
@@ -285,7 +289,7 @@ try {
     });
     async function checkLayout(name) {
       await page.screenshot({
-        path: resolve(artifacts, `${viewport.width}-${name}.png`),
+        path: resolve(artifacts, `${shotPrefix}-${name}.png`),
         fullPage: true,
       });
       const overflowDetails = await page.evaluate(() => {
@@ -296,7 +300,7 @@ try {
             const rect = element.getBoundingClientRect();
             return (
               rect.right > window.innerWidth + 1 &&
-              !element.closest(".table-scroll, .tabs")
+              !element.closest(".chips")
             );
           })
           .map((element) => ({
@@ -324,21 +328,19 @@ try {
       ).toBe(false);
       checks += 1;
     }
+    // Sidebar on wide screens, bottom tab bar on phones: the same navigation either way.
     async function navigate(name) {
-      if (viewport.width <= 700) {
-        await page.getByRole("button", { name: "打开导航" }).click();
-        await expect(page.locator("#root")).toHaveJSProperty("inert", true);
-        await checkLayout("drawer");
-        await page.getByRole("dialog").getByRole("button", { name }).click();
-        await expect(page.locator("#root")).toHaveJSProperty("inert", false);
-      } else
-        await page
-          .getByRole("navigation", { name: "主导航" })
-          .getByRole("button", { name })
-          .click();
+      await page
+        .getByRole("navigation", { name: "主导航" })
+        .getByRole("button", { name })
+        .click();
     }
     await page.goto("https://downkyi.test/");
     await expect(page.getByLabel("访问令牌")).toBeVisible();
+    // Dark palette follows the system with no saved choice.
+    expect(
+      await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+    ).toBe(colorScheme === "dark" ? "rgb(20, 24, 26)" : "rgb(255, 255, 255)");
     await checkLayout("login");
     await page.getByLabel("访问令牌").fill("browser-test-token");
     await page.getByRole("button", { name: "登录", exact: true }).click();
@@ -346,19 +348,23 @@ try {
     await checkLayout("empty");
     hasTasks = true;
     await page.getByRole("button", { name: "刷新任务" }).click();
-    await expect(page.locator(".task-table tbody tr")).toHaveCount(7);
-    if (viewport.width > 700) {
-      const nav = await page.locator(".app-nav").boundingBox(),
-        main = await page.locator("#main").boundingBox();
-      expect(nav.height).toBe(70);
-      expect(main.x).toBe(0);
-      expect(main.width).toBe(viewport.width);
+    // The completed task belongs to the library, not the download list.
+    await expect(page.locator(".task-row")).toHaveCount(6);
+    const sidebar = await page.locator(".sidebar").boundingBox(),
+      main = await page.locator("#main").boundingBox(),
+      tabs = await page.getByRole("navigation", { name: "主导航" }).boundingBox();
+    if (viewport.width > 760) {
+      expect(main.x).toBe(sidebar.width);
+      expect(sidebar.height).toBe(viewport.height);
       expect(
-        (await page.locator(".task-table tbody tr").first().boundingBox())
-          .height,
+        (await page.locator(".task-row").first().boundingBox()).height,
       ).toBeLessThanOrEqual(80);
+    } else {
+      expect(main.x).toBe(0);
+      expect(sidebar.height).toBe(56);
+      expect(tabs.y + tabs.height).toBe(viewport.height);
     }
-    await expect(page.locator(".table-title img").first()).toHaveJSProperty(
+    await expect(page.locator(".task-row .thumbnail img").first()).toHaveJSProperty(
       "naturalWidth",
       320,
     );
@@ -370,10 +376,7 @@ try {
     apiError = false;
     await page.getByRole("button", { name: "刷新任务" }).click();
     await expect(page.getByRole("alert")).toHaveCount(0);
-    await page
-      .locator("#main")
-      .getByRole("button", { name: "新建下载" })
-      .click();
+    await page.locator(".sidebar").getByRole("button", { name: "新建下载" }).click();
     await checkLayout("parse-input");
     await page.getByLabel("视频、合集、番剧链接或 BV / AV 号").fill("BVtest");
     await page.getByRole("button", { name: "读取列表", exact: true }).click();
@@ -531,13 +534,18 @@ try {
       .getByRole("button", { name: "任务详情：浏览器测试任务 4" })
       .click();
     await expect(page.locator(".stage-timeline .current")).toHaveText(
-      "4合并校验",
+      "合并校验",
     );
     await checkLayout("detail");
     await page.keyboard.press("Escape");
-    await navigate(/^已完成/);
+    await navigate(/^媒体库/);
     await expect(page.getByText("记录已移除 · 文件保留")).toBeVisible();
+    await expect(page.locator(".media-card")).toHaveCount(2);
     await checkLayout("library");
+    await page.getByRole("button", { name: "列表视图" }).click();
+    await expect(page.locator(".task-row.library")).toHaveCount(2);
+    await checkLayout("library-list");
+    await page.getByRole("button", { name: "封面视图" }).click();
     await page
       .getByRole("button", { name: "查看文件：保留的输出文件" })
       .click();
@@ -551,10 +559,21 @@ try {
     ).toBeDisabled();
     await checkLayout("file-delete");
     await page.keyboard.press("Escape");
-    await navigate("偏好设置");
-    await expect(page.getByRole("heading", { name: "下载设置" })).toBeVisible();
+    await navigate("设置");
+    await expect(page.getByRole("heading", { name: "下载", exact: true })).toBeVisible();
     await expect(page.getByLabel("下载目录", { exact: true })).toHaveValue(initialDownloadDir);
     await checkLayout("settings");
+    // An explicit choice overrides the system, survives a reload and can be undone.
+    const opposite = colorScheme === "dark" ? "浅色" : "深色";
+    await page.getByRole("group", { name: "颜色主题" }).getByRole("button", { name: opposite }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme === "dark" ? "light" : "dark");
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme === "dark" ? "light" : "dark");
+    await navigate("设置");
+    await expect(page.getByRole("group", { name: "颜色主题" }).getByRole("button", { name: opposite })).toHaveAttribute("aria-pressed", "true");
+    await checkLayout("settings-theme-override");
+    await page.getByRole("group", { name: "颜色主题" }).getByRole("button", { name: "跟随系统" }).click();
+    await expect(page.locator("html")).not.toHaveAttribute("data-theme", /./);
     const newDownloadDir = "/export/long-existing-directory-for-responsive-layout-check";
     await page.getByLabel("下载目录", { exact: true }).fill(newDownloadDir);
     rejectDirectory = true;
@@ -567,15 +586,15 @@ try {
     await expect(page.getByText("下载设置已保存")).toBeVisible();
     await expect(page.getByRole("button", { name: "保存设置" })).toBeDisabled();
     await checkLayout("settings-directory-saved");
-    await navigate(/^下载队列/);
+    await navigate(/^下载/);
     await expect(page.getByText(newDownloadDir, { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "任务详情：浏览器测试任务 4" }).click();
     await expect(page.getByText(`${initialDownloadDir}/test-3`, { exact: true })).toBeVisible();
     await checkLayout("detail-pinned-directory");
     await page.keyboard.press("Escape");
-    await navigate("偏好设置");
+    await navigate("设置");
     await expect(page.getByLabel("下载目录", { exact: true })).toHaveValue(newDownloadDir);
-    await page.getByRole("button", { name: "哔哩哔哩账户" }).click();
+    await page.getByRole("button", { name: "手动导入 Cookie" }).click();
     await expect(page.getByLabel("Netscape Cookie 文本")).toBeVisible();
     await checkLayout("account");
     await page.getByRole("button", { name: "扫码登录" }).click();
@@ -590,8 +609,9 @@ try {
     ).toBeVisible({ timeout: 6000 });
     await checkLayout("qr-expired");
     await page.keyboard.press("Escape");
-    await navigate("服务器");
-    await expect(page.getByRole("heading", { name: "运行环境" })).toBeVisible();
+    const server = page.getByRole("region", { name: "服务器" });
+    await server.scrollIntoViewIfNeeded();
+    await expect(server.getByText(newDownloadDir, { exact: true })).toBeVisible();
     await checkLayout("system");
     await page.getByRole("button", { name: "退出登录" }).click();
     await expect(page.getByLabel("访问令牌")).toBeVisible();
@@ -599,7 +619,7 @@ try {
   }
   expect(errors).toEqual([]);
   console.log(
-    `${checks} B-layout browser checks passed across 1440, 768, 390 and 320px; no page errors; no server started.`,
+    `${checks} B-layout browser checks passed across 1440, 768, 390 and 320px (plus dark mode at 1440 and 390px); no page errors; no server started.`,
   );
 } finally {
   await browser.close();

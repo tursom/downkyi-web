@@ -42,7 +42,7 @@ const files = [
 const xml = '<i><d p="0.5,1,25,16711680,0,0,u,1">滚动</d><d p="0.1,5,25,16777215,0,0,u,2">顶部</d><d p="0.2,4,25,255,0,0,u,3">底部</d><d p="1,7,25,0,0,0,u,4">高级</d></i>';
 
 function props(tasks: Task[]) {
-  return { tasks, loading: false, error: "", refresh: vi.fn(), onNew: vi.fn(), onBrowse: vi.fn(), message: "" };
+  return { tasks, loading: false, error: "", refresh: vi.fn(), onNew: vi.fn(), message: "" };
 }
 function playerFetch(list = files) {
   const fetch = vi.fn(async (url: string) =>

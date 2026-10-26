@@ -16,8 +16,8 @@ const tasks = [
   item("c2", "第二集", "合集·中世纪", "02", { status: "completed", progress: 100, total_bytes: 200 }),
   item("plain", "未归类视频", "", "04", { status: "paused", progress: 50 }),
 ];
-const props = (list: Task[]) => ({ tasks: list, loading: false, error: "", refresh: vi.fn(), onNew: vi.fn(), onBrowse: vi.fn(), message: "" });
-const rowTitles = () => screen.getAllByRole("row").slice(1).map((row) =>
+const props = (list: Task[]) => ({ tasks: list, loading: false, error: "", refresh: vi.fn(), onNew: vi.fn(), message: "" });
+const rowTitles = () => screen.getAllByRole("listitem").map((row) =>
   within(row).queryByRole("button", { expanded: true }) || within(row).queryByRole("button", { expanded: false })
     ? `#${row.querySelector(".group-toggle strong")!.textContent}`
     : row.querySelector(".task-title")!.textContent);
@@ -37,7 +37,7 @@ describe("collection grouping", () => {
     const { unmount } = render(<Tasks {...props(tasks)} />);
     // Newest first: the group sits at its newest member (第三集), after the two later standalone videos.
     expect(rowTitles()).toEqual(["单个视频", "未归类视频", "#合集·中世纪", "第一集", "第二集", "第三集"]);
-    const header = screen.getByRole("button", { name: /合集·中世纪/ }).closest("tr")!;
+    const header = screen.getByRole("button", { name: /合集·中世纪/ }).closest(".group-row") as HTMLElement;
     expect(header).toHaveTextContent("3 个视频");
     expect(header).toHaveTextContent("600 B");
     expect(header).toHaveTextContent("已完成 2/3");

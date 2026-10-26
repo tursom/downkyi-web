@@ -1,0 +1,235 @@
+.player-review {
+  --review-bg: #101316;
+  --review-panel: #191e23;
+  --review-text: #edf1f3;
+  --review-muted: #9aa6af;
+  --review-line: #2b333a;
+  --review-accent: #9ddac6;
+  --review-hover: #263139;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--review-bg);
+  color: var(--review-text);
+  overflow: auto;
+  overscroll-behavior: contain;
+  color-scheme: dark;
+  font: 400 14px/1.55 Inter, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  text-align: left;
+}
+.player-review::backdrop { background: #101316; }
+.player-review *, .player-review *::before, .player-review *::after { box-sizing: border-box; }
+.player-review [hidden] { display: none !important; }
+.player-review :is(h1, h2, h3, p, ol, dl, dd) { margin: 0; padding: 0; }
+.player-review :is(h1, h2, h3) { color: var(--review-text); font-weight: 600; }
+.player-review p { color: var(--review-muted); }
+.player-review button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  box-shadow: none;
+}
+.player-review button:hover:not(:disabled) { background: var(--review-hover); }
+.player-review button:disabled { cursor: default; opacity: .42; }
+.player-review :is(button, input, select, a, video):focus-visible { outline: 2px solid var(--review-accent); outline-offset: 3px; }
+.player-review svg { flex-shrink: 0; }
+.player-review a { color: inherit; text-decoration: none; }
+.player-review small { font-size: 11px; }
+.review-mode-picker { display: flex; gap: 3px; margin-left: auto; padding: 3px; border: 1px solid var(--review-line); border-radius: 8px; background: var(--review-panel); }
+.player-review .review-mode-picker button { padding: 7px 12px; font-size: 12px; }
+.player-review .review-mode-picker button[aria-pressed="true"] { background: var(--review-text); color: var(--review-bg); }
+.review-navigation { display: flex; align-items: center; gap: 24px; padding: 19px 32px; }
+.player-review .review-back { padding: 8px 0; font-size: 13px; }
+.review-brand { padding-left: 24px; border-left: 1px solid var(--review-line); font-weight: 600; letter-spacing: .3px; }
+.review-brand span { color: var(--review-muted); margin: 0 10px; font-weight: 400; }
+.review-position { color: var(--review-muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.review-position b { color: var(--review-text); font-size: 15px; margin-left: 8px; }
+.player-review .review-notice { display: flex; align-items: center; gap: 8px; margin: 0 32px 18px; font-size: 11px; }
+.review-notice > span { width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: var(--review-accent); }
+.review-workspace { display: grid; grid-template-columns: minmax(0, 1fr) 306px; gap: 0 24px; padding: 0 32px 30px; }
+.review-workspace > * { min-width: 0; }
+.review-stage { grid-column: 1; grid-row: 1; overflow: hidden; border-radius: 9px; background: #050709; color: #edf1f3; box-shadow: 0 18px 48px #0003; align-self: start; }
+.review-screen { position: relative; aspect-ratio: 16 / 9; background: #050709; }
+.review-screen video { display: block; width: 100%; height: 100%; object-fit: contain; aspect-ratio: 16 / 9; cursor: pointer; }
+.review-screen video::cue { background: #000b; color: #fff; font-size: 18px; }
+.review-screen-label { position: absolute; top: 18px; left: 20px; padding: 4px 7px; background: #070b0f8c; color: #ffffffbf; font-size: 9px; letter-spacing: 1.6px; pointer-events: none; border-radius: 3px; }
+.review-screen-label span { margin-left: 12px; letter-spacing: 0; }
+.review-controls { padding: 7px 16px 10px; background: #12171c; }
+.player-review input[type="range"] { display: block; min-width: 0; height: 18px; padding: 0; margin: 0; border: 0; border-radius: 0; accent-color: #9ddac6; cursor: pointer; background: transparent; box-shadow: none; }
+.player-review input[type="range"]:disabled { opacity: .35; cursor: default; }
+.player-review .review-seek { width: 100%; }
+.review-control-row, .review-transport, .review-settings, .review-volume { display: flex; align-items: center; gap: 4px; }
+.review-control-row { justify-content: space-between; gap: 12px; margin-top: 5px; flex-wrap: wrap; }
+.player-review .review-controls button { width: 36px; height: 36px; padding: 7px; color: #e1e8ed; flex-shrink: 0; }
+.player-review .review-controls button:hover:not(:disabled) { background: #2a353e; }
+.player-review .review-controls button[aria-pressed="true"] { color: #9ddac6; background: #263b36; }
+.player-review .review-controls .review-play { background: #e2eee9; color: #101c19; }
+.player-review .review-controls .review-play:hover { background: #b5ddce; }
+.review-time { margin-left: 9px; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.review-time span { color: #8f9da8; }
+.player-review .review-volume input { width: 64px; margin-right: 8px; }
+.player-review .review-settings select { width: 65px; height: 33px; min-width: 0; padding: 4px 5px; border: 1px solid #36414a; border-radius: 5px; color: #e1e8ed; background: #1b232a; font: inherit; font-size: 12px; color-scheme: dark; }
+.player-review .review-feedback { color: #ffd0a1; font-size: 12px; overflow-wrap: anywhere; }
+.player-review .review-feedback:not(:empty) { padding: 8px 2px 2px; }
+.review-heading { grid-column: 1; grid-row: 2; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 23px 0 16px; }
+.review-heading > div { min-width: 0; }
+.review-eyebrow { display: block; color: var(--review-muted); font-size: 10px; letter-spacing: 1.3px; }
+.player-review .review-heading h1 { margin: 7px 0 9px; font-size: clamp(21px, 2vw, 29px); line-height: 1.45; letter-spacing: -.5px; overflow-wrap: anywhere; }
+.player-review .review-heading p { font-size: 12px; }
+.review-heading p span { margin: 0 8px; color: var(--review-muted); }
+.player-review .review-watch-button { flex-shrink: 0; border-color: var(--review-line); color: var(--review-accent); font-size: 12px; }
+.player-review .review-watch-button:disabled { opacity: .8; }
+.review-playlist { grid-column: 2; grid-row: 1 / span 3; align-self: start; border: 1px solid var(--review-line); border-radius: 9px; background: var(--review-panel); overflow: hidden; }
+.review-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 22px 19px 16px; }
+.player-review .review-list-heading h2 { font-size: 18px; line-height: 1.5; margin-top: 4px; }
+.review-list-heading h2 span { color: var(--review-muted); font-size: 12px; font-weight: 400; margin-left: 7px; }
+.review-list-heading > svg { color: var(--review-muted); }
+.review-autoplay { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 14px; border-block: 1px solid var(--review-line); font-size: 10px; color: var(--review-muted); }
+.player-review .review-autoplay button { gap: 5px; padding: 5px 2px; font-size: 10px; }
+.review-autoplay button > span { width: 25px; height: 14px; border-radius: 9px; background: #64717b; padding: 2px; }
+.review-autoplay button > span::after { content: ''; display: block; width: 10px; height: 10px; border-radius: 50%; background: white; }
+.review-autoplay button[aria-checked="true"] > span { background: #278a70; }
+.review-autoplay button[aria-checked="true"] > span::after { transform: translateX(11px); }
+.player-review .review-episodes { list-style: none; padding: 10px; }
+.review-episodes li + li { margin-top: 4px; }
+.player-review .review-episode { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 11px; width: 100%; padding: 10px 7px; text-align: left; align-items: start; border-radius: 6px; }
+.player-review .review-episode[aria-current="true"] { background: #9ddac611; border-color: #9ddac633; }
+.review-thumbnail { position: relative; display: block; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 4px; background: #172229; }
+.review-thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.review-thumbnail > span { position: absolute; left: 4px; bottom: 3px; padding: 0 4px; background: #0009; color: white; font-size: 9px; border-radius: 2px; }
+.review-thumbnail i { position: absolute; inset: 0; display: grid; place-items: center; background: #09181755; color: white; }
+.review-episode-copy { min-width: 0; }
+.review-episode-copy strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12px; font-weight: 500; line-height: 1.6; }
+.review-episode-copy small { display: block; margin-top: 4px; color: var(--review-muted); font-size: 10px; }
+.review-episode-copy > span { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 5px; font-size: 9px; color: var(--review-muted); }
+.review-episode[aria-current="true"] .review-episode-copy > span { color: var(--review-accent); }
+.review-episode-copy b { display: inline-flex; align-items: center; gap: 2px; font-weight: 400; color: var(--review-accent); }
+.review-list-footer { padding: 15px 19px; border-top: 1px solid var(--review-line); font-size: 11px; color: var(--review-muted); }
+.player-review .review-list-footer p { font-size: 10px; margin-top: 3px; }
+.player-review .review-shortcuts { grid-column: 1; font-size: 10px; color: var(--review-muted); display: flex; flex-wrap: wrap; gap: 8px 22px; padding-top: 12px; border-top: 1px solid var(--review-line); }
+.player-review--detail, .player-review--mobile {
+  --review-bg: #f5f6f7;
+  --review-panel: #fff;
+  --review-text: #202c35;
+  --review-muted: #687780;
+  --review-line: #dfe5e8;
+  --review-accent: #16775f;
+  --review-hover: #eaf0ed;
+  color-scheme: light;
+}
+.player-review--detail .review-navigation, .player-review--mobile .review-navigation { background: #fff; border-bottom: 1px solid var(--review-line); }
+.player-review--detail .review-notice, .player-review--mobile .review-notice { margin-top: 17px; }
+.player-review--detail .review-workspace { grid-template-columns: minmax(0, 1fr) 330px; gap: 0 28px; }
+.player-review--detail .review-heading { grid-row: 1; padding: 7px 0 23px; align-items: end; }
+.player-review--detail .review-heading h1 { font-size: clamp(22px, 2.2vw, 31px); }
+.player-review--detail .review-stage { grid-row: 2; border-radius: 7px; box-shadow: 0 8px 24px #253a4612; }
+.player-review--detail .review-playlist { grid-row: 2 / span 2; }
+.player-review--detail .review-episode { grid-template-columns: 106px minmax(0, 1fr); }
+.player-review--detail .review-episode[aria-current="true"] { background: #eaf4ef; border-color: #cce1d7; }
+.review-details { grid-column: 1; grid-row: 3; padding: 26px 0; }
+.review-author { display: flex; align-items: center; gap: 12px; }
+.review-avatar { display: grid; place-items: center; width: 42px; height: 42px; border: 1px solid #d4e3da; border-radius: 50%; background: #e5eee8; color: #326e55; font-family: serif; font-size: 20px; }
+.player-review .review-author h2 { font-size: 15px; line-height: 1.5; margin-top: 2px; }
+.review-detail-tag { margin-left: auto; padding: 4px 9px; border: 1px solid var(--review-line); border-radius: 4px; color: var(--review-muted); font-size: 11px; }
+.player-review .review-description { font-size: 13px; margin: 17px 0 25px; line-height: 1.8; }
+.review-detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; border-top: 1px solid var(--review-line); padding-top: 21px; }
+.review-detail-grid > section { min-width: 0; }
+.player-review .review-detail-grid h3 { display: flex; align-items: center; gap: 10px; font-size: 13px; margin-bottom: 15px; }
+.review-detail-grid h3 > span { font-size: 10px; font-weight: 400; color: var(--review-muted); }
+.review-specs dl { display: grid; gap: 9px; font-size: 11px; }
+.review-specs dl > div { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 8px; }
+.review-specs dt { color: var(--review-muted); }
+.review-specs dd { overflow-wrap: anywhere; }
+.review-attachments a { display: flex; align-items: center; gap: 10px; padding: 12px; background: var(--review-panel); border: 1px solid var(--review-line); border-radius: 6px; }
+.review-attachments a:hover { border-color: var(--review-accent); }
+.review-attachments a strong, .review-attachments a small { display: block; }
+.review-attachments a strong { font-size: 12px; font-weight: 500; }
+.review-attachments a small { margin-top: 4px; color: var(--review-muted); font-size: 10px; }
+.review-attachments a > span:last-child { margin-left: auto; color: var(--review-accent); font-size: 11px; white-space: nowrap; }
+.player-review .review-attachments p { font-size: 10px; line-height: 1.8; margin-top: 11px; }
+.player-review--mobile .review-position { margin-left: auto; }
+.player-review--mobile .review-workspace { display: flex; flex-direction: column; gap: 0; }
+.player-review--mobile .review-stage { order: 0; width: 100%; }
+.player-review--mobile .review-heading { order: 1; align-items: flex-start; gap: 10px; }
+.player-review--mobile .review-mobile-tabs { order: 2; display: flex; gap: 20px; padding: 0 14px; border-bottom: 1px solid var(--review-line); background: var(--review-panel); border-radius: 8px 8px 0 0; }
+.player-review .review-mobile-tabs button { min-height: 48px; padding: 10px 2px; border-radius: 0; border-bottom: 2px solid transparent; color: var(--review-muted); }
+.player-review .review-mobile-tabs button[aria-selected="true"] { border-bottom-color: var(--review-accent); color: var(--review-accent); font-weight: 600; }
+.review-mobile-tabs button span { font-size: 11px; padding: 1px 6px; background: #eaf0ed; border-radius: 4px; }
+.player-review--mobile .review-playlist, .player-review--mobile .review-details { order: 3; margin: 0; width: 100%; border: 0; border-radius: 0 0 8px 8px; background: var(--review-panel); }
+.player-review--mobile .review-details { padding: 22px 16px; }
+.player-review--mobile .review-playlist .review-list-heading { display: none; }
+.player-review--mobile .review-autoplay { border-top: 0; }
+.player-review--mobile .review-episode[aria-current="true"] { background: #eaf4ef; border-color: #cce1d7; }
+.player-review--mobile .review-shortcuts { display: none; }
+.player-review--mobile .review-controls button { width: 44px; height: 44px; }
+.player-review--mobile .review-settings select { height: 44px; }
+.player-review--mobile .review-watch-button, .player-review--mobile .review-back, .player-review--mobile .review-autoplay button { min-height: 44px; }
+.review-stage:fullscreen { display: flex; flex-direction: column; width: 100%; height: 100%; padding: 0; border-radius: 0; background: #000; overflow: auto; }
+.review-stage:fullscreen .review-screen { flex: 1; min-height: 0; aspect-ratio: auto; }
+.review-stage:fullscreen video { width: 100%; height: 100%; object-fit: contain; }
+.review-stage:fullscreen .review-controls { flex-shrink: 0; width: 100%; padding: 9px 24px 16px; }
+@media (min-width: 1800px) {
+  .review-workspace { grid-template-columns: minmax(0, 1fr) 350px; padding-inline: 48px; gap: 0 30px; }
+  .player-review--detail .review-workspace { grid-template-columns: minmax(0, 1fr) 370px; }
+}
+@media (max-width: 1100px) {
+  .review-workspace, .player-review--detail .review-workspace { grid-template-columns: minmax(0, 1fr) 276px; padding-inline: 22px; gap: 0 18px; }
+  .player-review .review-episode, .player-review--detail .review-episode { grid-template-columns: 82px minmax(0, 1fr); gap: 8px; }
+  .review-heading { align-items: start; flex-wrap: wrap; gap: 12px; }
+  .review-detail-grid { gap: 20px; grid-template-columns: 1fr; }
+}
+@media (max-width: 820px) {
+  .review-workspace, .player-review--detail .review-workspace { grid-template-columns: minmax(0, 1fr); }
+  .review-playlist, .player-review--detail .review-playlist { grid-column: 1; grid-row: 4; margin-top: 24px; }
+  .player-review .review-episodes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .review-episodes li + li { margin-top: 0; }
+  .player-review .review-shortcuts { grid-row: 5; margin-top: 20px; }
+  .review-detail-grid { grid-template-columns: 1fr 1fr; }
+  .review-navigation { padding-inline: 22px; }
+  .player-review .review-notice { margin-inline: 22px; }
+}
+@media (max-width: 520px) {
+  .review-navigation { padding: 12px 14px; gap: 10px; }
+  .review-brand { display: none; }
+  .player-review .review-notice { margin: 0 14px 14px; font-size: 10px; line-height: 1.7; }
+  .player-review--detail .review-notice, .player-review--mobile .review-notice { margin-top: 12px; }
+  .review-workspace, .player-review--detail .review-workspace { padding: 0 12px 24px; }
+  .review-stage { border-radius: 5px; }
+  .review-controls { padding: 6px 10px 10px; }
+  .review-control-row { gap: 6px; }
+  .review-transport { flex: 1 0 100%; }
+  .review-time { margin-left: auto; }
+  .review-settings { width: 100%; justify-content: space-between; }
+  .player-review .review-volume input { width: 76px; }
+  .player-review .review-controls button { width: 44px; height: 44px; }
+  .review-screen-label { top: 10px; left: 10px; font-size: 8px; }
+  .review-heading { padding: 20px 2px 16px; }
+  .player-review .review-heading h1 { font-size: 21px; }
+  .review-heading p span { margin: 0 4px; }
+  .review-eyebrow { font-size: 9px; letter-spacing: 1px; }
+  .player-review--detail .review-heading { padding: 4px 2px 18px; }
+  .player-review .review-episodes { grid-template-columns: 1fr; }
+  .player-review .review-episode, .player-review--detail .review-episode { grid-template-columns: 112px minmax(0, 1fr); gap: 13px; }
+  .review-detail-grid { grid-template-columns: 1fr; gap: 24px; }
+  .review-details { padding: 22px 2px; }
+  .review-stage:fullscreen .review-controls { padding: 6px 12px 10px; }
+}

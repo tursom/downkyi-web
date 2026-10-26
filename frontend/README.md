@@ -1,6 +1,6 @@
 # DownKyi Web Frontend
 
-Production React + TypeScript + Vite client for `../IMPLEMENTATION.md`. The visual source is approved prototype B: full-width top navigation, compact task table, and a three-step download wizard. There is no production fixture data, simulated action, account resolution cap, or fixed cover image.
+Production React + TypeScript + Vite client for `../IMPLEMENTATION.md`. The visual source is the approved sidebar-and-cover redesign: desktop sidebar, mobile bottom navigation, download task list, media library cover grid, and a three-step download wizard. Settings include server information and a browser-local light/dark/system theme preference. There is no production fixture data, simulated action, account resolution cap, or fixed cover image.
 
 ## Verification
 
@@ -37,10 +37,11 @@ PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/path/to/chrome npm run test:browser
 
 ## Source Layout
 
-- `App.tsx`, `Login.tsx`: session boundary and B navigation.
+- `App.tsx`, `Login.tsx`: session boundary and responsive navigation.
 - `Tasks.tsx`, `TaskDetail.tsx`: queue/library, live details and separate delete confirmations.
 - `ParseModal.tsx`, `EntryPicker.tsx`, `DownloadSpecs.tsx`, `DownloadReview.tsx`: three-step workflow.
-- `Settings.tsx`, `QrLogin.tsx`, `System.tsx`: real settings, account lifecycle and server information.
+- `Settings.tsx`, `QrLogin.tsx`: real settings, account lifecycle and server information.
+- `src/theme.ts`, `public/theme.js`: browser-local theme preference and pre-render theme initialization.
 - `api.ts`, `hooks.ts`, `components.tsx`, `types.ts`: API errors, polling, accessible primitives and contract types.
 - `styles.css`, `workflow.css`: B layout and responsive styling.
 

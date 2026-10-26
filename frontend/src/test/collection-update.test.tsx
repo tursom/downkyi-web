@@ -35,7 +35,7 @@ describe("collection update checks", () => {
   it("offers a check on each collection row with the collection's link", async () => {
     const onCheckUpdates = vi.fn();
     render(<Tasks tasks={[member("a", { url: "https://www.bilibili.com/video/BVa" }), member("b", { url: "https://www.bilibili.com/video/BVb" })]}
-      loading={false} error="" refresh={vi.fn()} onNew={vi.fn()} onBrowse={vi.fn()} message="" onCheckUpdates={onCheckUpdates} />);
+      loading={false} error="" refresh={vi.fn()} onNew={vi.fn()} message="" onCheckUpdates={onCheckUpdates} />);
     await userEvent.setup().click(screen.getByRole("button", { name: "检查更新：合集·中世纪" }));
     expect(onCheckUpdates).toHaveBeenCalledWith("合集·中世纪", "https://www.bilibili.com/video/BVa");
   });

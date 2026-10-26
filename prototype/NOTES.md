@@ -4,6 +4,12 @@ Throwaway frontend for reviewing the download workflow before backend implementa
 No API calls, real downloads, database, or persistent credentials. Tasks and
 settings are demonstration data held in browser memory and reset on reload.
 
+The new optimization review has a separate `/optimization.html` entry with three
+alternatives. See [优化原型说明](OPTIMIZATION_PROTOTYPES.md). The existing `/` workflow
+and its previously selected layout remain available.
+The optimization player now remembers only its desktop layout preference in
+browser localStorage; its task and viewing fixtures still reset on reload.
+
 ## Run
 
 ```sh

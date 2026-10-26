@@ -1,5 +1,4 @@
 import {
-  Check,
   Download,
   File,
   FolderOpen,
@@ -35,27 +34,38 @@ export const isActive = (task: Task) =>
 // Only verified outputs are playable; removed records keep completed files in the library.
 export const canPlay = (task: Task) =>
   task.status === "completed" && !task.files_deleted;
-export function Badge({ status }: { status: TaskStatus }) {
-  return (
-    <span className={`badge ${status}`}>
-      <span className="status-dot" />
-      {statuses[status]}
-    </span>
-  );
+// One place for the state: label, percentage, bar and what is happening right now.
+function progressNote(task: Task) {
+  switch (task.status) {
+    case "downloading":
+      return [
+        task.speed != null && `${bytes(task.speed)}/s`,
+        task.eta != null && `剩余 ${duration(task.eta)}`,
+      ]
+        .filter(Boolean)
+        .join(" · ");
+    case "queued":
+      return "等待空闲下载位";
+    case "resolving":
+      return "读取可用画质和资源";
+    case "merging":
+      return "合并音视频并校验";
+    case "paused":
+      return `已下载 ${bytes(task.downloaded_bytes)}`;
+    case "completed":
+      return bytes(task.total_bytes);
+    default:
+      return "";
+  }
 }
 export function Progress({ task }: { task: Task }) {
   const value = percent(task.progress);
+  const note = progressNote(task);
   return (
     <div className={`progress-cell ${task.status}`}>
       <div className="progress-caption">
-        <span>
-          {task.status === "downloading"
-            ? `${bytes(task.speed)}/s`
-            : task.files_deleted
-              ? "文件已删除"
-              : statuses[task.status]}
-        </span>
-        <strong>{value.toFixed(1)}%</strong>
+        <strong>{task.files_deleted ? "文件已删除" : statuses[task.status]}</strong>
+        <span>{value.toFixed(1)}%</span>
       </div>
       <div
         className="progress-track"
@@ -67,6 +77,7 @@ export function Progress({ task }: { task: Task }) {
       >
         <i style={{ width: `${value}%` }} />
       </div>
+      {note && <small>{note}</small>}
     </div>
   );
 }
@@ -220,14 +231,17 @@ export default function TaskDetail({
   ];
   const phase = phases.indexOf(task.status);
   return (
-    <Modal title="任务详情" onClose={onClose} className="detail-dialog">
+    <Modal title="任务详情" onClose={onClose} side className="detail-dialog">
+      <div className="sheet-body">
       <Thumbnail
         src={task.thumbnail}
         title={task.title}
         className="detail-cover"
       />
       <h3>{task.title}</h3>
-      <Badge status={task.status} />
+      {task.group && task.group !== task.title && (
+        <p className="detail-group">{task.group}</p>
+      )}
       {phase >= 0 && (
         <ol className="stage-timeline" aria-label="任务处理阶段">
           {phases.map((status, index) => (
@@ -238,7 +252,6 @@ export default function TaskDetail({
               }
               aria-current={phase === index ? "step" : undefined}
             >
-              <span>{phase > index ? <Check size={12} /> : index + 1}</span>
               {statuses[status]}
             </li>
           ))}
@@ -288,14 +301,6 @@ export default function TaskDetail({
             {bytes(task.downloaded_bytes)} / {bytes(task.total_bytes)}
           </dd>
         </div>
-        {task.status === "downloading" && (
-          <div>
-            <dt>速度 / 剩余时间</dt>
-            <dd>
-              {bytes(task.speed)}/s · {duration(task.eta)}
-            </dd>
-          </div>
-        )}
         <div>
           <dt>添加时间</dt>
           <dd>{dateTime(task.created_at)}</dd>
@@ -310,6 +315,7 @@ export default function TaskDetail({
       {(task.status === "completed" || task.record_removed) && (
         <TaskFiles key={`${task.id}-${task.files_deleted}`} task={task} />
       )}
+      </div>
       <footer className="dialog-footer">
         {!task.record_removed && (
           <button

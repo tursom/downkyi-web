@@ -11,7 +11,7 @@ it('keeps removed unfinished storage discoverable and separately deletable', asy
   render(<Tasks library tasks={[
     {...task, id:'retained', title:'未完成保留任务', status:'paused', record_removed:true},
     {...task, id:'completed', title:'完成的视频', status:'completed'},
-  ]} loading={false} error="" refresh={vi.fn()} onNew={vi.fn()} onBrowse={vi.fn()} message=""/>);
+  ]} loading={false} error="" refresh={vi.fn()} onNew={vi.fn()} message=""/>);
   await user.click(screen.getByRole('button', {name:/待清理/}));
   expect(screen.queryByText('完成的视频')).not.toBeInTheDocument();
   expect(screen.getByText('记录已移除 · 临时文件待清理')).toBeVisible();

@@ -46,7 +46,7 @@ docker compose exec downloader cat /data/admin-token
 | `./docker-data` | `/data` | SQLite、配置、登录凭据和任务锁 |
 | `./downloads` | `/downloads` | 默认下载文件与续传文件 |
 
-部署到 `nas` 的 `/opt/downkyi` 时，额外使用 `deploy/compose.nas.yaml` 挂载 `/export`，具体配置与运维命令见 [NAS 部署记录](deploy/NAS.md)。
+如需访问额外的宿主机目录，可在部署目录创建 `compose.override.yaml`，为 `downloader` 服务添加所需的 bind mount。源目录应事先存在，并将其映射到容器内的专用媒体目录；在 Web 设置中填写容器内路径。主机地址、实际挂载路径及运维记录由部署者单独维护。
 
 文件直接保存在宿主机，重建容器不会清空。两个绑定都禁止 Docker 自动创建缺失的源目录，避免误写位置或生成错误权限的目录。具备 Node.js 的开发/验收机器可在拉取镜像后运行 `node scripts/check-bind-mounts.mjs`，验证实际挂载和 root 用户读写权限；脚本默认使用 Compose 的镜像，可用 `DOWNKYI_CHECK_IMAGE` 指定已有本地测试镜像。
 
@@ -62,7 +62,7 @@ docker compose exec downloader cat /data/admin-token
 
 通过 HTTPS 访问时参考 `deploy/nginx.conf`，替换域名和证书，并保留原始 Host。二维码轮询和解析走同源 API；解析响应使用流式进度和每 15 秒一次的心跳，请关闭反代缓冲，反代读取空闲超时应大于心跳间隔，避免设置响应总时长上限。默认不信任代理提供的客户端 IP，因此经代理的登录限速按代理地址共享。
 
-容器以 root（UID/GID 0）运行，Compose 显式设置 `user: "0:0"`，并保留 Docker 默认 capabilities，以便访问 NAS 上不同所有者的文件。无需将现有数据或共享目录改成 UID 1000，也未启用 privileged 模式。默认仅绑定数据和下载目录；NAS 专用配置额外挂载 `/export`。SQLite 和任务锁保留在本地 `./docker-data`，不要将 `/data` 放到 NFS 上。
+容器以 root（UID/GID 0）运行，Compose 显式设置 `user: "0:0"`，并保留 Docker 默认 capabilities，以便访问 NAS 上不同所有者的文件。无需将现有数据或共享目录改成 UID 1000，也未启用 privileged 模式。默认仅绑定数据和下载目录，额外挂载由部署者按需配置。SQLite 和任务锁保留在本地 `./docker-data`，不要将 `/data` 放到 NFS 上。
 
 本机运行的 `./data` 和旧 Docker 卷不会自动迁移或删除。下载记录保存每个任务原来的绝对路径；跨宿主机/容器迁移时，必须让原路径仍可访问，或单独进行离线路径迁移。仅复制媒体并修改默认目录不会重定位旧任务。迁移前停止原应用、备份完整数据与下载文件，检查目标路径可访问且可写；不要同时运行两个实例写入同一份数据。若原服务仍占用 8511，先停止原服务或为容器选择其他 `DOWNKYI_PORT`。
 

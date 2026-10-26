@@ -1,6 +1,6 @@
 # Implementation Contract
 
-Single-user headless application. The approved prototype B layout is the visual source of truth; no demonstration data or simulated actions in the production frontend. Backend FastAPI serves frontend/dist and /api in a single process, port 8511 for local acceptance. The prototype on 8510 remains available during development.
+Single-user headless application. The approved sidebar-and-cover redesign is the visual source of truth; no demonstration data or simulated actions in the production frontend. Backend FastAPI serves frontend/dist and /api in a single process, with local port 8511 by default. Prototype preview commands are documented in prototype/NOTES.md.
 
 ## API
 All paths below start /api. Session cookie authentication by default, same-origin. `DOWNKYI_AUTH_MODE=none` explicitly disables workspace authentication for all APIs/files; request-origin, body-size and path guards remain active. Only use on a trusted network. Errors {detail: string} (422 may be Pydantic list). No secrets returned except short-lived QR image and URL.

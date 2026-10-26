@@ -13,13 +13,13 @@ browser localStorage; its task and viewing fixtures still reset on reload.
 ## Run
 
 ```sh
-cd /root/dev/bili/downkyi-web/prototype
+cd prototype # from the repository root
 npm install
 npm run dev -- --port 8510
 ```
 
-Open `/` (old `?variant=` links also show B). The preview currently runs on
-port 8510. Backend implementation remains paused.
+Open `http://localhost:8510/` after starting the preview (old `?variant=` links
+also show B). This preview is independent of the production backend.
 
 ## Design Decision
 

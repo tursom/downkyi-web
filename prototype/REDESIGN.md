@@ -7,7 +7,7 @@
 ## 预览
 
 ```sh
-cd /root/dev/bili/downkyi-web/prototype
+cd prototype # 从仓库根目录执行
 npm run dev -- --port 8510 --strictPort
 ```
 
